@@ -33,9 +33,15 @@ If it's missing, stop and ask the user to install the BuildGuard Studio plugin a
   ```lua
   BG.apply(BG.planSnap({ road1, road2 }))   -- or BG.planSnap(roadsModel)
   ```
-  Name them `Road…`/`Street…`/`Highway…`, `Rail…` or `Track…`, or set the attribute `BuildGuardKind = "Road" | "Rail" | "Track"`. The driving surface is the part's **Top** face, so build road parts flat side up. Ramps (tilted over 5°) aren't snapped.
+  Name them `Road…`/`Street…`/`Highway…`, `Rail…` or `Track…`, or set the attribute `BuildGuardKind = "Road" | "Rail" | "Track"`. The driving surface is the part's **Top** face, so build road parts flat side up. Ramps (tilted over 5°) aren't snapped. Snapping leaves roads 0.1 and rails 0.2 above whatever is under them.
 - **Nothing sits on top of a road or rail** except layered items. Buildings, crates, terrain and props must stay off them.
-- **Connected road pieces must be drivable.** Keep the step and the angle at each join within `maxLedge` and `maxSlopeChange` for that model. See them with `print(BG.explainConfig(workspace.YourBuild))`.
+- **Roads and rails must be drivable by a loaded truck.** The project limits are:
+  - every road at least **16 studs wide** across its driving direction;
+  - no road or rail piece tilted more than **20°**;
+  - at most a **1-stud step** and a **20° angle change** where two pieces join.
+
+  Check the limits for a model with `print(BG.explainConfig(workspace.YourBuild))`. To climb more than 20°, build switchbacks; don't make a steeper ramp.
+- **Lay out roads, rails and buildings on the 4-stud grid:** `part.CFrame = BG.snapToGrid(cf)`. This rounds X and Z only. Heights come from the snap and from layers, so never round heights or small detail to the grid.
 - Set `Size` and `CFrame` before `Parent`, and anchor static parts.
 - Do the build in a few `run_code` calls, not one per part, and `print` what you made so you can see it.
 

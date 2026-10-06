@@ -7,9 +7,9 @@ A Roblox Studio plugin (and a library you can call from the command bar or MCP `
 | **Z-fight scan** | Finds pairs of parts with faces pointing the same way, within `zFightTolerance` (0.01 studs) of each other, that overlap | Preview, then apply a nudge (undoable) |
 | **Layer offsets** | `Layers.place(item, surface, { layer = n })` puts markings, signs and trim on a face, lifted `n × layerLift` | Prevents z-fighting in the first place |
 | **Buried-part check** | Samples every road/rail/track top surface every 2 studs and flags any spot under terrain or another part | Snap onto the ground if the cover is terrain or ground; otherwise flagged for a person to decide |
-| **Snap to ground** | Raycasts down under roads/rails/tracks and puts them `groundLift` above the surface | Preview, then apply (undoable) |
-| **Drivability lint** | Flags ledges above `maxLedge` and slope changes above `maxSlopeChange` between connected road parts | Report only |
-| **Test scene + self-test** | Builds a messy scene with 10 planted problems and proves each one is found, then fixed (or still flagged, for lint and manual cases) | — |
+| **Snap to ground** | Raycasts down under roads/rails/tracks and puts them their kind's lift above the surface (roads 0.1, rails 0.2) | Preview, then apply (undoable) |
+| **Drivability lint** | For roads and rails: ledges above `maxLedge` and slope changes above `maxSlopeChange` between connected pieces, any piece steeper than `maxRouteSlope`, and roads narrower than `minRoadWidth` | Report only |
+| **Test scene + self-test** | Builds a messy scene with 12 planted problems and proves each one is found, then fixed (or still flagged, for lint and manual cases) | — |
 
 ## Install
 
@@ -65,7 +65,7 @@ BG.Layers.place(sign, wall, { face = "Front", layer = 1, v = 2 })
 print(BG.selfTest().text)                  -- planted-problem self-test
 ```
 
-`BG.scan(root, { config = { maxLedge = 0.3 } })` overrides any value for one call.
+`BG.scan(root, { config = { maxLedge = 0.3 } })` overrides any value for one call. `BG.snapToGrid(cframe)` rounds X and Z to the 4-stud grid (height and rotation untouched).
 
 ## How parts are classified
 
@@ -78,23 +78,35 @@ print(BG.selfTest().text)                  -- planted-problem self-test
 ## How the fixes decide
 
 - **Z-fighting:** the smaller part of the pair moves (a layered item over a plain one; never a locked or ground part). It is nudged out along the shared face normal until the faces are `zFightNudge` apart. If it fights on both opposite sides of one axis, a nudge clears both but sinks one side into the other part. That's fine when the sunk side is hidden anyway (a marking's underside on a road), so it still nudges. When both sides are visible (a window exactly as thick as its wall), it grows by the nudge on both sides instead.
-- **Snap:** samples the part's underside every 2 studs and raycasts down, starting 20 studs above the part so a sunk part still finds the surface over it. It moves the part up or down so its lowest point sits `groundLift` above the highest ground hit. Ground means terrain or a part that starts *below* the snapped part's bottom, so markings, crates or rails sitting on it don't count.
+- **Snap:** samples the part's underside every 2 studs and raycasts down, starting 20 studs above the part so a sunk part still finds the surface over it. It moves the part up or down so its lowest point sits its kind's lift (`roadLift`, `railLift`, `trackLift`, else `groundLift`) above the highest ground hit. Ground means terrain or a part that starts *below* the snapped part's bottom, so markings, crates or rails sitting on it don't count.
 - **Buried:** a point is buried when something occupies the space `buriedProbeHeight` (0.25) above the surface, so markings lying on the road don't trigger it, or when something within `buriedClearance` (3 studs) overhead covers it. Bridges and gantries higher than that are fine.
 
 ## Values
 
 Defaults are in `src/BuildGuard/Config.lua`. Any model, folder or part can override them for itself and everything under it with `BuildGuard_<key>` attributes. You can edit those in Studio's Properties panel, or set them with `BG.setConfig(model, { maxSlopeChange = 25 }, "reason")`, which validates the values and records the reason. The nearest ancestor wins, and attributes on `workspace` are place-wide. Every report lists the overrides in effect with their reasons. An invalid attribute is reported as an error and ignored. When a check compares two parts, z-fighting uses the stricter setting and ledge/slope limits use the looser one. The full table of overridable keys and ranges is in `claude-plugin/roblox-buildguard/skills/roblox-building/reference.md`.
 
+Project numbers (approved for the mining game):
+
+| Key | Value | Meaning |
+|---|---|---|
+| `maxLedge` | 1.0 | Largest step between connected road (or rail) pieces; truck-tested |
+| `maxRouteSlope` | 20° | Steepest any road or rail piece may tilt; a loaded truck must climb it |
+| `maxSlopeChange` | 20° | Largest angle between connected pieces (catches crests and dips) |
+| `minRoadWidth` | 16 | One truck plus passing room, measured across the driving direction |
+| `gridSize` | 4 | Horizontal layout grid (`BG.snapToGrid`); matches terrain voxels |
+| `railLift` | 0.2 | Rails above their road/track bed |
+| `roadLift` | 0.1 | Roads above the ground |
+| `layerLift` | 0.05 | Lift per decal/marking layer |
+
+Engine values:
+
 | Key | Value | Meaning |
 |---|---|---|
 | `zFightTolerance` | 0.01 | Same-facing faces this close together z-fight |
 | `zFightNudge` | 0.02 | Gap a z-fight fix leaves (must be > tolerance) |
-| `layerLift` | 0.02 | Lift per layer |
-| `groundLift` | 0.05 | Gap between a snapped road/rail and the ground |
+| `trackLift` / `groundLift` | 0.1 | Track beds / anything else you snap |
 | `groundTolerance` | 0.1 | Off-ground check fires beyond this |
 | `flatTiltDegrees` | 5 | Steeper parts are ramps (not snapped) |
-| `maxLedge` | **0.5 (provisional)** | Drivability: max step between connected roads |
-| `maxSlopeChange` | **15° (provisional)** | Drivability: max angle between connected roads |
 
 ## Tests
 

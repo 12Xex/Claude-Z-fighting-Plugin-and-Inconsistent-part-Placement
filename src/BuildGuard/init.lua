@@ -37,7 +37,8 @@ BuildGuard.Layers = Layers
 BuildGuard.TestScene = TestScene
 
 local SEVERITY_ORDER = { error = 1, warning = 2 }
-local CHECK_ORDER = { config = 0, buried = 1, offground = 2, zfight = 3, ledge = 4, slope = 5 }
+local CHECK_ORDER =
+	{ config = 0, buried = 1, offground = 2, zfight = 3, ledge = 4, slope = 5, routeslope = 6, roadwidth = 7 }
 
 local function defaultWorld()
 	if game then
@@ -283,6 +284,21 @@ function BuildGuard.format(report)
 		)
 	end
 	return table.concat(lines, "\n")
+end
+
+-- Snaps a position (Vector3) or CFrame to the horizontal grid (gridSize,
+-- per-model via `relativeTo`'s config). Only X and Z move; height and
+-- rotation are kept, since heights come from snapping to ground and layers.
+function BuildGuard.snapToGrid(value, relativeTo)
+	local grid = (if relativeTo then BuildGuard.getConfig(relativeTo) else Config.defaults).gridSize
+	local function round(n)
+		return math.floor(n / grid + 0.5) * grid
+	end
+	if typeof(value) == "Vector3" then
+		return Vector3.new(round(value.X), value.Y, round(value.Z))
+	end
+	local p = value.Position
+	return value + Vector3.new(round(p.X) - p.X, 0, round(p.Z) - p.Z)
 end
 
 --------------------------------------------------------------------------------
