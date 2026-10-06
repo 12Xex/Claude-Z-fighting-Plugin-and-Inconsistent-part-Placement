@@ -80,6 +80,11 @@ function SelfTest.run(BuildGuard, options)
 			end
 		end
 	end
+	local listed = false
+	for _, o in before.overrides do
+		listed = listed or o.instance == scene.overrideModel
+	end
+	row(listed, "override   MountainPass's BuildGuard_maxSlopeChange is listed in the report")
 	local controlState = snapshot(scene.controls)
 
 	-- 2. Preview, apply, revert.

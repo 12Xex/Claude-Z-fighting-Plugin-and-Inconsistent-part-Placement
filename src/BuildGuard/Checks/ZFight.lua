@@ -31,12 +31,15 @@ local function boxesNear(a, b, margin)
 end
 
 function ZFight.scan(ctx)
-	local config = ctx.config
-	local tolerance = config.zFightTolerance
+	-- The broad phase uses the largest tolerance any part has; each pair is
+	-- then judged with its own combined config.
+	local tolerance = 0
 	local candidates = {}
 	for _, s in ctx.solids do
+		local config = ctx.configFor(s.part)
 		if s.part.Transparency < config.zFightIgnoreTransparency and #Geometry.faces(s) > 0 then
 			table.insert(candidates, s)
+			tolerance = math.max(tolerance, config.zFightTolerance)
 		end
 	end
 
@@ -53,11 +56,12 @@ function ZFight.scan(ctx)
 		for _, j in near do
 			local b = candidates[j]
 			if j > i and boxesNear(a, b, tolerance) then
+				local config = ctx.pairConfig(a.part, b.part)
 				local contacts = {}
 				for _, fa in Geometry.faces(a) do
 					for _, fb in Geometry.faces(b) do
 						local area, distance =
-							Geometry.coplanarOverlap(fa, fb, tolerance, config.zFightMinOverlapArea)
+							Geometry.coplanarOverlap(fa, fb, config.zFightTolerance, config.zFightMinOverlapArea)
 						if area then
 							table.insert(contacts, { faceA = fa, faceB = fb, area = area, distance = distance })
 						end
@@ -75,6 +79,7 @@ function ZFight.scan(ctx)
 						parts = { a.part, b.part },
 						solids = { a, b },
 						contacts = contacts,
+						config = config,
 						message = ("%s and %s z-fight: %s face(s) overlap %.2f studs²"):format(
 							a.part.Name,
 							b.part.Name,
@@ -125,9 +130,10 @@ local function hiddenBeyond(face, distance, world, exclude)
 end
 
 -- Adds the nudges for `issues` to `plan`. Returns the issues it couldn't fix.
--- `world` (optional) lets it check whether a sunk face would be hidden.
+-- `config` is the scan's base config (for locking rules); each issue's nudge
+-- comes from its own pair config. `world` (optional) lets it check whether a
+-- sunk face would be hidden.
 function ZFight.plan(issues, config, plan, world)
-	local nudge = config.zFightNudge
 	local requests, order, unfixable = {}, {}, {}
 
 	for _, issue in issues do
@@ -149,12 +155,15 @@ function ZFight.plan(issues, config, plan, world)
 				extra = Vector3.zero,
 				against = {},
 				exclude = { [mover.part] = true },
+				nudge = 0,
 			}
 			requests[mover.part] = request
 			table.insert(order, mover.part)
 		end
 		request.against[other.part.Name] = true
 		request.exclude[other.part] = true
+		local nudge = (issue.config or config).zFightNudge
+		request.nudge = math.max(request.nudge, nudge)
 		for _, contact in issue.contacts do
 			local moverFace = if mover == a then contact.faceA else contact.faceB
 			local baseFace = if mover == a then contact.faceB else contact.faceA
@@ -180,7 +189,7 @@ function ZFight.plan(issues, config, plan, world)
 		for axis = 1, 3 do
 			local p, n = request.pos[axis], request.neg[axis]
 			if p > 0 and n > 0 then
-				local probe = config.zFightNudge + 0.01
+				local probe = request.nudge + 0.01
 				local posHidden = hiddenBeyond(request.posFace[axis], probe, world, request.exclude)
 				local negHidden = hiddenBeyond(request.negFace[axis], probe, world, request.exclude)
 				if negHidden and not posHidden then

@@ -61,10 +61,13 @@ end
 
 -- Places `item` on `surface`. Options: face, layer (default 1), u, v, rotation,
 -- config, keepPosition (take u/v/rotation from where the item is now).
+-- Without `config`, the lift follows BuildGuard_layerLift on the surface or
+-- its ancestors.
 -- Returns the item.
 function Layers.place(item, surface, options)
 	options = options or {}
-	local config = options.config or Config.defaults
+	-- The surface's own settings (BuildGuard_layerLift on it or a parent).
+	local config = options.config or (Config.resolver(Config.defaults).resolve(surface))
 	local layer = options.layer or 1
 	local u, v, rotation = options.u, options.v, options.rotation
 	if options.keepPosition then

@@ -9,6 +9,10 @@
 
 	Surfaces more than `connectMaxStep` apart vertically are treated as an
 	overpass and skipped. Each road's driving surface is its Top (+Y) face.
+
+	Limits come from the pair's combined config (Config.combine): a model
+	given looser limits with BuildGuard_ attributes governs its own joins,
+	including joins to roads outside it.
 ]]
 
 local Geometry = require(script.Parent.Parent.Geometry)
@@ -28,17 +32,31 @@ local function topCenter(s)
 	return s.cf:PointToWorldSpace(Vector3.new(0, s.half.Y, 0))
 end
 
+-- ", set on Model X" when a pair's limit came from a BuildGuard_ attribute.
+local function limitNote(ctx, a, b, key, value)
+	for _, part in { a, b } do
+		local config, sources = ctx.configFor(part)
+		if config[key] == value and sources[key] then
+			return ", set on " .. sources[key].Name
+		end
+	end
+	return ""
+end
+
 function Drivability.scan(ctx)
-	local config = ctx.config
 	local roads = {}
+	local marginXZ, marginY = 0, 0
 	for _, s in ctx.solids do
 		if ctx.kindOf(s.part) == "Road" then
 			table.insert(roads, { solid = s, footprint = footprint(s) })
+			local config = ctx.configFor(s.part)
+			marginXZ = math.max(marginXZ, config.connectMargin)
+			marginY = math.max(marginY, config.connectMaxStep)
 		end
 	end
 
 	local hash = SpatialHash.new(16)
-	local margin = Vector3.new(config.connectMargin, config.connectMaxStep, config.connectMargin)
+	local margin = Vector3.new(marginXZ, marginY, marginXZ)
 	for i, r in roads do
 		hash:insert(i, r.solid.min, r.solid.max)
 	end
@@ -54,6 +72,7 @@ function Drivability.scan(ctx)
 			end
 			local rb = roads[j]
 			local b = rb.solid
+			local config = ctx.pairConfig(a.part, b.part)
 			if Geometry.polygonSeparation(ra.footprint, rb.footprint) > config.connectMargin then
 				continue
 			end
@@ -76,11 +95,12 @@ function Drivability.scan(ctx)
 					parts = { a.part, b.part },
 					position = at,
 					value = step,
-					message = ("Ledge of %.2f studs between %s and %s (limit %.2f)"):format(
+					message = ("Ledge of %.2f studs between %s and %s (limit %.2f%s)"):format(
 						step,
 						a.part.Name,
 						b.part.Name,
-						config.maxLedge
+						config.maxLedge,
+						limitNote(ctx, a.part, b.part, "maxLedge", config.maxLedge)
 					),
 				})
 			end
@@ -91,11 +111,12 @@ function Drivability.scan(ctx)
 					parts = { a.part, b.part },
 					position = at,
 					value = angle,
-					message = ("Slope change of %.1f° between %s and %s (limit %.1f°)"):format(
+					message = ("Slope change of %.1f° between %s and %s (limit %.1f°%s)"):format(
 						angle,
 						a.part.Name,
 						b.part.Name,
-						config.maxSlopeChange
+						config.maxSlopeChange,
+						limitNote(ctx, a.part, b.part, "maxSlopeChange", config.maxSlopeChange)
 					),
 				})
 			end

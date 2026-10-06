@@ -72,7 +72,7 @@ end
 -- Works out how far `s` must move vertically to sit on the ground.
 -- Returns { delta = number } or { skip = reason }.
 function Ground.measure(s, ctx)
-	local config = ctx.config
+	local config = ctx.configFor(s.part)
 	local tilt = Geometry.tiltDegrees(s)
 	if tilt > config.flatTiltDegrees then
 		return { skip = ("tilted %.1f°, treated as a ramp"):format(tilt) }
@@ -130,7 +130,7 @@ function Ground.scan(ctx, alreadyFlagged)
 		local kind = ctx.kindOf(s.part)
 		if kind and not alreadyFlagged[s.part] then
 			local m = Ground.measure(s, ctx)
-			if m.delta and math.abs(m.delta) > ctx.config.groundTolerance then
+			if m.delta and math.abs(m.delta) > ctx.configFor(s.part).groundTolerance then
 				local what = if m.delta < 0
 					then ("hovers %.2f studs above the ground"):format(-m.delta)
 					else ("is sunk %.2f studs into the ground"):format(m.delta)

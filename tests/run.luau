@@ -330,6 +330,94 @@ test("unknown keys and a nudge not above tolerance are rejected", function()
 	expect(not pcall(BG.Config.merge, { zFightNudge = 0.005 }))
 end)
 
+print("Per-model config")
+
+local function model(parent, name, attributes)
+	local m = Instance.new("Model")
+	m.Name = name
+	for key, value in attributes or {} do
+		m:SetAttribute(key, value)
+	end
+	m.Parent = parent
+	return m
+end
+
+test("model attribute loosens its own roads; nearest ancestor wins; workspace is place-wide", function()
+	local root, world, part = setup()
+	local m = model(root, "Hills", { BuildGuard_maxLedge = 1 })
+	part("Road_A", Vector3.new(20, 1, 10), CFrame.new(0, 0.55, 0), m)
+	part("Plinth", Vector3.new(20, 0.8, 10), CFrame.new(20, 0.4, 0), m)
+	local b = part("Road_B", Vector3.new(20, 1, 10), CFrame.new(20, 1.35, 0), m)
+	expect(#checks(BG.scan(root, { world = world }), "ledge") == 0, "0.8 step allowed by model's maxLedge = 1")
+	b:SetAttribute("BuildGuard_maxLedge", 0.6)
+	local ledge = checks(BG.scan(root, { world = world }), "ledge")
+	-- Pair takes the looser of the two sides: Road_A still allows 1.
+	expect(#ledge == 0, "pair uses the looser drivability limit")
+	m:SetAttribute("BuildGuard_maxLedge", nil)
+	root:SetAttribute("BuildGuard_maxLedge", 0.7)
+	ledge = checks(BG.scan(root, { world = world }), "ledge")
+	expect(#ledge == 1, "workspace-wide 0.7 (A) vs part 0.6 (B): 0.8 step flagged")
+	expect(string.find(ledge[1].message, "set on Workspace", 1, true), ledge[1].message)
+end)
+
+test("z-fighting combines to the stricter tolerance across a model boundary", function()
+	local root, world, part = setup()
+	local wall = part("Wall", Vector3.new(10, 10, 1), CFrame.new(0, 5, 0))
+	local m = model(root, "Signs", { BuildGuard_zFightTolerance = 0.002, BuildGuard_zFightNudge = 0.004 })
+	part("Sign", Vector3.new(2, 2, 0.4), CFrame.new(0, 5, -0.305), m) -- 0.005 off the wall
+	expect(#checks(BG.scan(root, { world = world }), "zfight") == 1, "wall's 0.01 still applies to the pair")
+	wall.Parent = m
+	expect(#checks(BG.scan(root, { world = world }), "zfight") == 0, "both inside the model: 0.002 applies")
+	local report = BG.scan(root, { world = world })
+	expect(#report.overrides == 1 and string.find(report.overrides[1].text, "no reason given", 1, true))
+end)
+
+test("per-part groundLift is used by snapping", function()
+	local root, world, part = setup()
+	local m = model(root, "Rails", { BuildGuard_groundLift = 0.2 })
+	local rail = part("Rail_1", Vector3.new(20, 0.5, 1), CFrame.new(0, 5, 0), m)
+	BG.apply((BG.planSnap({ rail }, { world = world })))
+	near(rail.CFrame.Position.Y - 0.25, 0.2, 1e-4)
+end)
+
+test("Layers follows BuildGuard_layerLift on the surface", function()
+	local _, _, part = setup()
+	local road = part("Road", Vector3.new(20, 1, 10), CFrame.new(0, 0.55, 0))
+	road:SetAttribute("BuildGuard_layerLift", 0.05)
+	local mark = BG.Layers.place(part("Mark", Vector3.new(4, 0.1, 0.5), CFrame.new()), road, { layer = 2 })
+	near(mark.CFrame.Position.Y - 0.05, 1.05 + 0.1, 1e-4)
+end)
+
+test("invalid attributes are reported as config errors and ignored", function()
+	local root, world, part = setup()
+	local m = model(root, "Bad", { BuildGuard_maxLedge = "lots", BuildGuard_groundNames = 3, BuildGuard_maxSlopeChange = 120 })
+	part("Road_A", Vector3.new(20, 1, 10), CFrame.new(0, 0.55, 0), m)
+	local report = BG.scan(root, { world = world })
+	local bad = checks(report, "config")
+	expect(#bad == 3, BG.format(report))
+	expect(report.counts.error == 3)
+	local config = BG.getConfig(m.Road_A)
+	expect(config.maxLedge == BG.Config.defaults.maxLedge, "falls back to inherited value")
+end)
+
+test("setConfig validates, records a reason, and clearConfig removes it", function()
+	local root = setup()
+	local m = model(root, "Town")
+	expect(not pcall(BG.setConfig, m, { maxLedge = 1 }), "reason required")
+	expect(not pcall(BG.setConfig, m, { maxLedgee = 1 }, "x"), "unknown key")
+	expect(not pcall(BG.setConfig, m, { groundNames = {} }, "x"), "global key")
+	expect(not pcall(BG.setConfig, m, { maxSlopeChange = 91 }, "x"), "out of range")
+	expect(not pcall(BG.setConfig, m, { zFightNudge = 0.005 }, "x"), "nudge must exceed inherited tolerance")
+	BG.setConfig(m, { maxSlopeChange = 25, maxLedge = 0.75 }, "hill town")
+	expect(m:GetAttribute("BuildGuard_maxSlopeChange") == 25 and m:GetAttribute("BuildGuardConfigReason") == "hill town")
+	local text = BG.explainConfig(m)
+	expect(string.find(text, "maxSlopeChange%s+25%s+set on") ~= nil, text)
+	BG.clearConfig(m, { "maxLedge" })
+	expect(m:GetAttribute("BuildGuard_maxLedge") == nil and m:GetAttribute("BuildGuardConfigReason") == "hill town")
+	BG.clearConfig(m)
+	expect(m:GetAttribute("BuildGuard_maxSlopeChange") == nil and m:GetAttribute("BuildGuardConfigReason") == nil)
+end)
+
 print("Self-test (planted-problem scene)")
 
 for _, overrides in { {}, { maxLedge = 0.25, maxSlopeChange = 8 }, { maxLedge = 1, maxSlopeChange = 30 } } do

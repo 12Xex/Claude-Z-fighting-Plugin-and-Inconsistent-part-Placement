@@ -244,7 +244,7 @@ local function showReport(report)
 			("[%s] %s%s"):format(issue.check, issue.message, if fixable then "" else " (manual)"),
 			color,
 			function()
-				Selection:Set(issue.parts)
+				Selection:Set(if #issue.parts > 0 then issue.parts else { issue.instance })
 			end
 		)
 	end

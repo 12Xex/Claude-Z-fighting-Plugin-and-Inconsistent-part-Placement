@@ -83,7 +83,7 @@ print(BG.selfTest().text)                  -- planted-problem self-test
 
 ## Values
 
-All numbers are in `src/BuildGuard/Config.lua`.
+Defaults are in `src/BuildGuard/Config.lua`. Any model, folder or part can override them for itself and everything under it with `BuildGuard_<key>` attributes. You can edit those in Studio's Properties panel, or set them with `BG.setConfig(model, { maxSlopeChange = 25 }, "reason")`, which validates the values and records the reason. The nearest ancestor wins, and attributes on `workspace` are place-wide. Every report lists the overrides in effect with their reasons. An invalid attribute is reported as an error and ignored. When a check compares two parts, z-fighting uses the stricter setting and ledge/slope limits use the looser one. The full table of overridable keys and ranges is in `claude-plugin/roblox-buildguard/skills/roblox-building/reference.md`.
 
 | Key | Value | Meaning |
 |---|---|---|

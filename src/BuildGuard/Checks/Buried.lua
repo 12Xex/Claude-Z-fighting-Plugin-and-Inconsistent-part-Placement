@@ -34,11 +34,12 @@ local function coverIgnore(part, ctx)
 end
 
 function Buried.scan(ctx)
-	local config, world = ctx.config, ctx.world
+	local world = ctx.world
 	local issues = {}
 	for _, s in ctx.solids do
 		local kind = ctx.kindOf(s.part)
 		if kind then
+			local config = ctx.configFor(s.part)
 			local ignore = coverIgnore(s.part, ctx)
 			local up = s.axes[2]
 			local covered, covers, coverOrder = 0, {}, {}
@@ -67,7 +68,7 @@ function Buried.scan(ctx)
 				local names, allGround = {}, true
 				for _, cover in coverOrder do
 					table.insert(names, cover.Name)
-					if not Classify.isGroundLike(cover, config) and not world.isTerrain(cover) then
+					if not Classify.isGroundLike(cover, ctx.config) and not world.isTerrain(cover) then
 						allGround = false
 					end
 				end

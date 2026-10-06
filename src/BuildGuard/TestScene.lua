@@ -20,6 +20,9 @@
 
 	The ledge and slope sizes are derived from the config, so the scene still
 	plants a real violation (and a real non-violation) whatever limits you set.
+
+	The MountainPass model carries a BuildGuard_maxSlopeChange attribute, so
+	its steep join is allowed: a control proving per-model overrides work.
 ]]
 
 local Layers = require(script.Parent.Layers)
@@ -136,8 +139,17 @@ function TestScene.build(parent, world, config, origin)
 		control(part("Rail_OnBed", Vector3.new(23, 0.3, 0.3), CFrame.new(-40, 0.75, 100 + z), Color3.fromRGB(110, 110, 120), Enum.Material.Metal))
 	end
 
+	-- Per-model override: MountainPass allows its own steep join.
+	local pass = Instance.new("Model")
+	pass.Name = "MountainPass"
+	pass:SetAttribute("BuildGuard_maxSlopeChange", steep + 10)
+	pass:SetAttribute("BuildGuardConfigReason", "switchback mountain road")
+	pass.Parent = folder
+	control(road("Road_M1", Vector3.new(20, 1, 10), CFrame.new(-60, 0.55, -100))).Parent = pass
+	control(road("Road_M2_Steep", Vector3.new(16, 1, 10), CFrame.new(-50, 1.05, -100) * CFrame.Angles(0, 0, math.rad(steep)) * CFrame.new(8, -0.5, 0))).Parent = pass
+
 	folder.Parent = parent
-	return { folder = folder, planted = planted, controls = controls, terrain = { hill } }
+	return { folder = folder, planted = planted, controls = controls, terrain = { hill }, overrideModel = pass }
 end
 
 function TestScene.destroy(scene, world)

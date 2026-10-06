@@ -37,7 +37,7 @@ BuildGuard.Layers = Layers
 BuildGuard.TestScene = TestScene
 
 local SEVERITY_ORDER = { error = 1, warning = 2 }
-local CHECK_ORDER = { buried = 1, offground = 2, zfight = 3, ledge = 4, slope = 5 }
+local CHECK_ORDER = { config = 0, buried = 1, offground = 2, zfight = 3, ledge = 4, slope = 5 }
 
 local function defaultWorld()
 	if game then
@@ -51,7 +51,16 @@ local function newContext(root, options)
 	local config = Config.merge(options.config)
 	local world = options.world or defaultWorld()
 	local kinds = {}
-	local ctx = { config = config, world = world, root = root }
+	local resolver = Config.resolver(config)
+	local ctx = { config = config, world = world, root = root, resolver = resolver }
+	-- Effective config for one part (call options + BuildGuard_ attributes on
+	-- it and its ancestors). Returns config, sources (key -> setting instance).
+	function ctx.configFor(part)
+		return resolver.resolve(part)
+	end
+	function ctx.pairConfig(a, b)
+		return Config.combine((resolver.resolve(a)), (resolver.resolve(b)))
+	end
 	function ctx.kindOf(part)
 		local kind = kinds[part]
 		if kind == nil then
@@ -68,6 +77,7 @@ local function newContext(root, options)
 				if not seen[part] then
 					seen[part] = true
 					table.insert(ctx.solids, Geometry.solid(part))
+					resolver.resolve(part)
 				end
 			end
 		end
@@ -97,6 +107,22 @@ function BuildGuard.scan(root, options)
 	add(Ground.scan(ctx, flagged))
 	add(ZFight.scan(ctx))
 	add(Drivability.scan(ctx))
+	-- Invalid BuildGuard_ attributes found while resolving (they're ignored,
+	-- and the part falls back to its parent's settings).
+	local badConfig = {}
+	for _, e in ctx.resolver.errors do
+		local key = e.instance:GetFullName() .. "." .. e.attribute
+		if not badConfig[key] then
+			badConfig[key] = true
+			table.insert(issues, {
+				check = "config",
+				severity = "error",
+				parts = if e.instance:IsA("BasePart") then { e.instance } else {},
+				instance = e.instance,
+				message = ("%s attribute %s ignored: %s"):format(e.instance:GetFullName(), e.attribute, e.message),
+			})
+		end
+	end
 
 	table.sort(issues, function(a, b)
 		if a.severity ~= b.severity then
@@ -119,6 +145,7 @@ function BuildGuard.scan(root, options)
 		world = ctx.world,
 		counts = counts,
 		root = root,
+		overrides = BuildGuard.describeOverrides(ctx.resolver.owners),
 	}
 end
 
@@ -237,6 +264,12 @@ function BuildGuard.format(report)
 			report.counts.warning
 		),
 	}
+	if #report.overrides > 0 then
+		table.insert(lines, "  Config overrides in effect:")
+		for _, o in report.overrides do
+			table.insert(lines, "    " .. o.text)
+		end
+	end
 	for _, issue in report.issues do
 		local fixable = issue.fixItems ~= nil or issue.check == "zfight"
 		table.insert(
@@ -250,6 +283,125 @@ function BuildGuard.format(report)
 		)
 	end
 	return table.concat(lines, "\n")
+end
+
+--------------------------------------------------------------------------------
+-- Per-model config (BuildGuard_<key> attributes)
+--------------------------------------------------------------------------------
+
+-- Sets config overrides on `instance` (a model, folder, part or workspace).
+-- They apply to it and everything under it, and every report lists them with
+-- `reason`, so say why the build needs them. One undo step in Studio.
+--     BG.setConfig(workspace.MountainPass, { maxSlopeChange = 25 }, "switchback road")
+function BuildGuard.setConfig(instance, overrides, reason)
+	assert(typeof(instance) == "Instance", "BuildGuard.setConfig: instance expected")
+	assert(type(reason) == "string" and #reason > 0, "BuildGuard.setConfig: give a reason for the override")
+	local proposed = table.clone((Config.ownOverrides(instance)))
+	for key, value in overrides do
+		local ok, message = Config.check(key, value, true)
+		if not ok then
+			error("BuildGuard.setConfig: " .. message, 2)
+		end
+		proposed[key] = value
+	end
+	-- Validate the combination against what it inherits.
+	local inherited = Config.resolver(Config.defaults).resolve(instance.Parent)
+	local merged = table.clone(inherited)
+	for key, value in proposed do
+		merged[key] = value
+	end
+	if merged.zFightNudge <= merged.zFightTolerance then
+		error("BuildGuard.setConfig: zFightNudge must be larger than zFightTolerance", 2)
+	end
+	BuildGuard.withUndo("BuildGuard: set config", function()
+		for key, value in overrides do
+			instance:SetAttribute(Config.ATTRIBUTE_PREFIX .. key, value)
+		end
+		instance:SetAttribute(Config.REASON_ATTRIBUTE, reason)
+	end)
+end
+
+-- Removes overrides from `instance`: the listed keys, or all of them.
+function BuildGuard.clearConfig(instance, keys)
+	BuildGuard.withUndo("BuildGuard: clear config", function()
+		local remaining = false
+		for name in instance:GetAttributes() do
+			if string.sub(name, 1, #Config.ATTRIBUTE_PREFIX) == Config.ATTRIBUTE_PREFIX then
+				local key = string.sub(name, #Config.ATTRIBUTE_PREFIX + 1)
+				if keys == nil or table.find(keys, key) then
+					instance:SetAttribute(name, nil)
+				else
+					remaining = true
+				end
+			end
+		end
+		if not remaining then
+			instance:SetAttribute(Config.REASON_ATTRIBUTE, nil)
+		end
+	end)
+end
+
+-- Effective config for `instance`: config, sources (key -> instance that set it).
+function BuildGuard.getConfig(instance, options)
+	local base = Config.merge(options and options.config)
+	return Config.resolver(base).resolve(instance)
+end
+
+-- Every setting for `instance` with where it comes from, as text.
+function BuildGuard.explainConfig(instance, options)
+	local config, sources = BuildGuard.getConfig(instance, options)
+	local keys = {}
+	for key, spec in Config.schema do
+		if spec.min and spec.scope ~= "global" then
+			table.insert(keys, key)
+		end
+	end
+	table.sort(keys)
+	local lines = { "BuildGuard config for " .. instance:GetFullName() .. ":" }
+	for _, key in keys do
+		local source = sources[key]
+		table.insert(
+			lines,
+			("  %-24s %-8s %s"):format(
+				key,
+				tostring(config[key]),
+				if source then "set on " .. source:GetFullName() else "default"
+			)
+		)
+	end
+	return table.concat(lines, "\n")
+end
+
+-- { instance, overrides, reason, text } for each instance carrying overrides.
+function BuildGuard.describeOverrides(instances)
+	local out = {}
+	for _, instance in instances do
+		local overrides = Config.ownOverrides(instance)
+		local keys = {}
+		for key in overrides do
+			table.insert(keys, key)
+		end
+		table.sort(keys)
+		local parts = {}
+		for _, key in keys do
+			table.insert(parts, key .. "=" .. tostring(overrides[key]))
+		end
+		local reason = instance:GetAttribute(Config.REASON_ATTRIBUTE)
+		table.insert(out, {
+			instance = instance,
+			overrides = overrides,
+			reason = reason,
+			text = ("%s: %s%s"):format(
+				instance:GetFullName(),
+				table.concat(parts, ", "),
+				if reason then (" — %q"):format(reason) else " — no reason given"
+			),
+		})
+	end
+	table.sort(out, function(a, b)
+		return a.text < b.text
+	end)
+	return out
 end
 
 -- One call for agents: the report plus a preview of the fixes (not applied).
