@@ -31,15 +31,13 @@ local function boxesNear(a, b, margin)
 end
 
 function ZFight.scan(ctx)
-	-- The broad phase uses the largest tolerance any part has; each pair is
-	-- then judged with its own combined config.
-	local tolerance = 0
+	-- Detection settings are global (no model can loosen them).
+	local config = ctx.config
+	local tolerance = config.zFightTolerance
 	local candidates = {}
 	for _, s in ctx.solids do
-		local config = ctx.configFor(s.part)
 		if s.part.Transparency < config.zFightIgnoreTransparency and #Geometry.faces(s) > 0 then
 			table.insert(candidates, s)
-			tolerance = math.max(tolerance, config.zFightTolerance)
 		end
 	end
 
@@ -56,7 +54,6 @@ function ZFight.scan(ctx)
 		for _, j in near do
 			local b = candidates[j]
 			if j > i and boxesNear(a, b, tolerance) then
-				local config = ctx.pairConfig(a.part, b.part)
 				local contacts = {}
 				for _, fa in Geometry.faces(a) do
 					for _, fb in Geometry.faces(b) do
@@ -79,7 +76,8 @@ function ZFight.scan(ctx)
 						parts = { a.part, b.part },
 						solids = { a, b },
 						contacts = contacts,
-						config = config,
+						-- The fix's nudge size comes from the pair's settings.
+						config = (ctx.pairConfig(a.part, b.part)),
 						message = ("%s and %s z-fight: %s face(s) overlap %.2f studs²"):format(
 							a.part.Name,
 							b.part.Name,

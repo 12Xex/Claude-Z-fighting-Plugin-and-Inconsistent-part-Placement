@@ -11,10 +11,13 @@
 	     its own limits and workspace attributes act as place-wide settings.
 	     Set them with BG.setConfig(instance, { key = value }, reason).
 
-	Checks that compare two parts combine the two parts' settings per key (see
-	`pair` in the schema): z-fighting always takes the stricter value, and the
-	drivability limits take the looser one, so a model allowed steeper joins
-	also governs its joins to roads outside it.
+	A check comparing two parts (a road join, a z-fighting pair) uses the
+	settings of the smallest instance containing both. A model's overrides
+	cover joins inside it; where it meets roads outside it, the outside
+	settings apply.
+
+	Z-fighting detection (tolerance, minimum overlap, ignored transparency) is
+	global: no model can loosen it.
 
 	Project numbers (roads, rails, layers, drivability) were approved for the
 	mining game; see README "Values".
@@ -96,13 +99,13 @@ Config.defaults = {
 	groundMinFootprint = 512,
 }
 
--- Per-key rules. `scope = "global"` keys can't be set by attributes (tables,
--- or settings about other parts). `pair` is how two parts' values combine.
+-- Per-key rules. `scope = "global"` keys can't be set by attributes: tables,
+-- settings about other parts, and z-fighting detection.
 Config.schema = {
-	zFightTolerance = { min = 0.001, max = 0.1, pair = "max" },
-	zFightMinOverlapArea = { min = 0, max = 10, pair = "min" },
-	zFightNudge = { min = 0.002, max = 0.5, pair = "max" },
-	zFightIgnoreTransparency = { min = 0, max = 1 },
+	zFightTolerance = { scope = "global", min = 0.001, max = 0.1 },
+	zFightMinOverlapArea = { scope = "global", min = 0, max = 10 },
+	zFightNudge = { min = 0.002, max = 0.5 },
+	zFightIgnoreTransparency = { scope = "global", min = 0, max = 1 },
 	layerLift = { min = 0.002, max = 0.5 },
 	roadLift = { min = 0, max = 2 },
 	railLift = { min = 0, max = 2 },
@@ -116,12 +119,12 @@ Config.schema = {
 	buriedProbeHeight = { min = 0.01, max = 10 },
 	buriedClearance = { min = 0.1, max = 100 },
 	sampleSpacing = { min = 0.25, max = 50 },
-	maxLedge = { min = 0, max = 50, pair = "max" },
-	maxSlopeChange = { min = 0, max = 90, pair = "max" },
+	maxLedge = { min = 0, max = 50 },
+	maxSlopeChange = { min = 0, max = 90 },
 	maxRouteSlope = { min = 0, max = 90 },
 	minRoadWidth = { min = 0, max = 1000 },
-	connectMargin = { min = 0, max = 5, pair = "max" },
-	connectMaxStep = { min = 0.1, max = 100, pair = "max" },
+	connectMargin = { min = 0, max = 5 },
+	connectMaxStep = { min = 0.1, max = 100 },
 	kindNamePatterns = { scope = "global" },
 	groundNames = { scope = "global" },
 	drivableKinds = { scope = "global" },
@@ -141,7 +144,7 @@ function Config.check(key, value, fromAttribute)
 	if fromAttribute and spec.scope == "global" then
 		return false, ("%s can only be set in Config.lua or a call's options, not per model"):format(key)
 	end
-	if spec.min then
+	if spec.min ~= nil then
 		if type(value) ~= "number" or value ~= value then
 			return false, ("%s must be a number, got %s"):format(key, tostring(value))
 		end
@@ -243,20 +246,22 @@ function Config.resolver(base)
 	return self
 end
 
--- One config for a check comparing two parts (see `pair` in the schema).
-function Config.combine(a, b)
-	if a == b then
-		return a
+-- The smallest instance that contains both `a` and `b` (or nil).
+function Config.commonAncestor(a, b)
+	local seen = {}
+	local node = a
+	while node do
+		seen[node] = true
+		node = node.Parent
 	end
-	local out = table.clone(a)
-	for key, spec in Config.schema do
-		if spec.pair == "max" then
-			out[key] = math.max(a[key], b[key])
-		elseif spec.pair == "min" then
-			out[key] = math.min(a[key], b[key])
+	node = b
+	while node do
+		if seen[node] then
+			return node
 		end
+		node = node.Parent
 	end
-	return out
+	return nil
 end
 
 return Config

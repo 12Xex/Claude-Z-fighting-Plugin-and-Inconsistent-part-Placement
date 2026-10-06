@@ -391,34 +391,51 @@ local function model(parent, name, attributes)
 	return m
 end
 
-test("model attribute loosens its own roads; nearest ancestor wins; workspace is place-wide", function()
+test("joins use the smallest model holding both pieces; part-level overrides don't loosen joins", function()
 	local root, world, part = setup()
-	local m = model(root, "Hills", { BuildGuard_maxLedge = 1 })
-	part("Road_A", Vector3.new(20, 1, 10), CFrame.new(0, 0.55, 0), m)
-	part("Plinth", Vector3.new(20, 0.8, 10), CFrame.new(20, 0.4, 0), m)
-	local b = part("Road_B", Vector3.new(20, 1, 10), CFrame.new(20, 1.35, 0), m)
-	expect(#checks(BG.scan(root, { world = world }), "ledge") == 0, "0.8 step allowed by model's maxLedge = 1")
-	b:SetAttribute("BuildGuard_maxLedge", 0.6)
+	local step = D.maxLedge + 0.3
+	local m = model(root, "Hills", { BuildGuard_maxLedge = step + 0.5 })
+	part("Road_A", Vector3.new(20, 1, 16), CFrame.new(0, 0.6, 0), m)
+	part("Plinth", Vector3.new(20, step, 16), CFrame.new(20, step / 2, 0), m)
+	local b = part("Road_B", Vector3.new(20, 1, 16), CFrame.new(20, step + 0.6, 0), m)
+	expect(#checks(BG.scan(root, { world = world }), "ledge") == 0, "step allowed inside Hills")
+
+	-- Move Road_B out of the model: the join now spans Hills and the outside.
+	b.Parent = root
 	local ledge = checks(BG.scan(root, { world = world }), "ledge")
-	-- Pair takes the looser of the two sides: Road_A still allows 1.
-	expect(#ledge == 0, "pair uses the looser drivability limit")
-	m:SetAttribute("BuildGuard_maxLedge", nil)
-	root:SetAttribute("BuildGuard_maxLedge", 0.7)
+	expect(#ledge == 1, "outside settings govern the join between the model and the outside")
+
+	-- A part-level override on one side doesn't loosen the join either.
+	b:SetAttribute("BuildGuard_maxLedge", step + 0.5)
+	expect(#checks(BG.scan(root, { world = world }), "ledge") == 1, "part override ignored for the join")
+
+	-- A place-wide (workspace) setting does cover it, and is named in the message.
+	root:SetAttribute("BuildGuard_maxLedge", step - 0.1)
+	b:SetAttribute("BuildGuard_maxLedge", nil)
 	ledge = checks(BG.scan(root, { world = world }), "ledge")
-	expect(#ledge == 1, "workspace-wide 0.7 (A) vs part 0.6 (B): 0.8 step flagged")
-	expect(string.find(ledge[1].message, "set on Workspace", 1, true), ledge[1].message)
+	expect(#ledge == 1 and string.find(ledge[1].message, "set on Workspace", 1, true), ledge[1] and ledge[1].message)
+	root:SetAttribute("BuildGuard_maxLedge", step + 0.1)
+	expect(#checks(BG.scan(root, { world = world }), "ledge") == 0, "place-wide limit loosened")
 end)
 
-test("z-fighting combines to the stricter tolerance across a model boundary", function()
+test("z-fighting detection can't be loosened per model", function()
 	local root, world, part = setup()
 	local wall = part("Wall", Vector3.new(10, 10, 1), CFrame.new(0, 5, 0))
-	local m = model(root, "Signs", { BuildGuard_zFightTolerance = 0.002, BuildGuard_zFightNudge = 0.004 })
+	local m = model(root, "Signs", { BuildGuard_zFightTolerance = 0.002, BuildGuard_zFightIgnoreTransparency = 0 })
 	part("Sign", Vector3.new(2, 2, 0.4), CFrame.new(0, 5, -0.305), m) -- 0.005 off the wall
-	expect(#checks(BG.scan(root, { world = world }), "zfight") == 1, "wall's 0.01 still applies to the pair")
-	wall.Parent = m
-	expect(#checks(BG.scan(root, { world = world }), "zfight") == 0, "both inside the model: 0.002 applies")
 	local report = BG.scan(root, { world = world })
-	expect(#report.overrides == 1 and string.find(report.overrides[1].text, "no reason given", 1, true))
+	expect(#checks(report, "zfight") == 1, "still detected")
+	expect(#checks(report, "config") == 2, "both attributes reported as invalid")
+	expect(not pcall(BG.setConfig, m, { zFightTolerance = 0.002 }, "x"), "setConfig refuses")
+	-- The nudge size can still be set per model (it applies when both parts are in it).
+	BG.setConfig(m, { zFightNudge = 0.04 }, "chunky signage")
+	local plan = BG.planFixes(BG.scan(root, { world = world }))
+	near(plan.items[1].toCFrame.Position.Z - plan.items[1].fromCFrame.Position.Z, -(0.02 - 0.005), 1e-4, "wall outside: outside nudge")
+	wall.Parent = m
+	m:SetAttribute("BuildGuard_zFightTolerance", nil)
+	m:SetAttribute("BuildGuard_zFightIgnoreTransparency", nil)
+	plan = BG.planFixes(BG.scan(root, { world = world }))
+	near(plan.items[1].toCFrame.Position.Z - plan.items[1].fromCFrame.Position.Z, -(0.04 - 0.005), 1e-4, "both inside: model's nudge")
 end)
 
 test("lift depends on kind, and a model can override it", function()

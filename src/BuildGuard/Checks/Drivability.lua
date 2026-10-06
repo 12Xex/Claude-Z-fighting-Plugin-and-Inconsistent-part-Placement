@@ -18,9 +18,9 @@
 	Surfaces more than `connectMaxStep` apart vertically are treated as an
 	overpass and skipped. Each road's driving surface is its Top (+Y) face.
 
-	Limits come from the pair's combined config (Config.combine): a model
-	given looser limits with BuildGuard_ attributes governs its own joins,
-	including joins to roads outside it.
+	Limits for a join come from the smallest instance containing both pieces
+	(ctx.pairConfig): a model's overrides cover joins inside it, and joins to
+	roads outside it use the outside settings.
 ]]
 
 local Geometry = require(script.Parent.Parent.Geometry)
@@ -40,15 +40,10 @@ local function topCenter(s)
 	return s.cf:PointToWorldSpace(Vector3.new(0, s.half.Y, 0))
 end
 
--- ", set on Model X" when a pair's limit came from a BuildGuard_ attribute.
-local function limitNote(ctx, a, b, key, value)
-	for _, part in { a, b } do
-		local config, sources = ctx.configFor(part)
-		if config[key] == value and sources[key] then
-			return ", set on " .. sources[key].Name
-		end
-	end
-	return ""
+-- ", set on Model X" when a join's limit came from a BuildGuard_ attribute.
+local function limitNote(ctx, a, b, key)
+	local _, sources = ctx.pairConfig(a, b)
+	return if sources[key] then ", set on " .. sources[key].Name else ""
 end
 
 function Drivability.scan(ctx)
@@ -135,7 +130,7 @@ function Drivability.scan(ctx)
 						a.part.Name,
 						b.part.Name,
 						config.maxLedge,
-						limitNote(ctx, a.part, b.part, "maxLedge", config.maxLedge)
+						limitNote(ctx, a.part, b.part, "maxLedge")
 					),
 				})
 			end
@@ -151,7 +146,7 @@ function Drivability.scan(ctx)
 						a.part.Name,
 						b.part.Name,
 						config.maxSlopeChange,
-						limitNote(ctx, a.part, b.part, "maxSlopeChange", config.maxSlopeChange)
+						limitNote(ctx, a.part, b.part, "maxSlopeChange")
 					),
 				})
 			end

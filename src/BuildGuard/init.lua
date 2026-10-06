@@ -59,8 +59,9 @@ local function newContext(root, options)
 	function ctx.configFor(part)
 		return resolver.resolve(part)
 	end
+	-- Config for a check comparing two parts: the smallest instance holding both.
 	function ctx.pairConfig(a, b)
-		return Config.combine((resolver.resolve(a)), (resolver.resolve(b)))
+		return resolver.resolve(Config.commonAncestor(a, b))
 	end
 	function ctx.kindOf(part)
 		local kind = kinds[part]
