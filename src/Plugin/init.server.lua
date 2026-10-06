@@ -446,6 +446,11 @@ end
 
 local function onBuildScene()
 	removeTestScene()
+	-- Drop any earlier scan/preview so the list matches the new selection.
+	state.pending = nil
+	state.report = nil
+	clearMarkers()
+	clearList()
 	local world = require(script.Parent.BuildGuard.StudioWorld).new()
 	BuildGuard.withUndo("BuildGuard: build test scene", function()
 		state.testScene = BuildGuard.TestScene.build(
