@@ -29,6 +29,7 @@ rojo build default.project.json -o BuildGuard.rbxm
 This repo is also a Claude Code plugin marketplace. The `roblox-buildguard` plugin gives Claude:
 
 - a **`roblox-building` skill** Claude loads on its own whenever it builds in Studio. It covers using `Layers.place` for details, snapping roads and rails, keeping roads drivable, and running BuildGuard's check before calling a build done.
+- **step-by-step workflows** (`skills/roblox-building/workflows.md`) for each kind of build: landscape, roads, rails, tunnels and caves, rivers, town buildings, details, vehicles and NPCs, plus how to report back and what to do when something goes wrong. At the start of each session Claude checks that the library in the place is the right version.
 - a **`/roblox-buildguard:check [path]`** command: report, preview, then apply fixes only after you say yes.
 
 Setup, once:

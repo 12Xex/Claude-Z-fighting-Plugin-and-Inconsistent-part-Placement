@@ -30,6 +30,10 @@ local Drivability = require(script.Checks.Drivability)
 
 local BuildGuard = {}
 
+-- Matches the Claude plugin's version; the skill checks it so an old copy in
+-- ServerStorage gets reinstalled.
+BuildGuard.VERSION = "0.5.0"
+
 BuildGuard.Config = Config
 BuildGuard.Geometry = Geometry
 BuildGuard.Classify = Classify

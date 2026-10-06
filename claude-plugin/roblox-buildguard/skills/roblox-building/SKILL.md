@@ -7,15 +7,19 @@ description: Rules for building or editing parts in a Roblox place through a Rob
 
 You change the place by sending Luau to Studio through the Roblox Studio MCP tool that runs code (for example `run_code`). BuildGuard is a library inside the place that prevents and catches the classic build bugs.
 
-## 0. Make sure BuildGuard is there
+## 0. Make sure BuildGuard is there and current
 
 Run this first in every session:
 
 ```lua
-print(game.ServerStorage:FindFirstChild("BuildGuard") and "BuildGuard ready" or "BuildGuard missing")
+local m = game.ServerStorage:FindFirstChild("BuildGuard")
+print(if m then "BuildGuard " .. tostring(require(m).VERSION) else "BuildGuard missing")
 ```
 
-If it's missing, stop and ask the user to install the BuildGuard Studio plugin and press **Install library** in its panel. Don't build without it.
+- **Missing:** stop and ask the user to install the BuildGuard Studio plugin and press **Install library** in its panel. Don't build without it.
+- **Not `"0.5.0"`:** the place has an old copy. Ask the user to press **Install library** again, then re-run the check.
+
+For the step-by-step order to build each kind of thing (session start, landscape, roads, rails, tunnels and caves, rivers, buildings, signs and details, vehicles, NPCs) and how to report back, follow [workflows.md](workflows.md).
 
 ## 1. Rules while building
 

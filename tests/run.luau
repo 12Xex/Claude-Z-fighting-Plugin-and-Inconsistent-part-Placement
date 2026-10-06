@@ -491,6 +491,34 @@ test("fixes keep Welds/Motor6Ds in step, and revert restores them", function()
 	expect(holds() and (weld.C1.Position - before.Position).Magnitude < 1e-6, "revert restores C1")
 end)
 
+test("workflows.md ramp formula joins flush, in any heading, uphill or down", function()
+	for _, heading in { 0, 90, 217 } do
+		for _, angle in { 12, -12 } do
+			local root, world, part = setup()
+			local flat = part("Road_Flat", Vector3.new(20, 1, 16), CFrame.new(0, 0.6, 0) * CFrame.Angles(0, math.rad(heading), 0))
+			local edge = flat.CFrame:PointToWorldSpace(Vector3.new(10, 0.5, 0))
+			local ramp = part("Road_Ramp", Vector3.new(16, 1, 16), CFrame.new())
+			ramp.CFrame = CFrame.new(edge)
+				* CFrame.Angles(0, math.rad(heading), 0)
+				* CFrame.Angles(0, 0, math.rad(angle))
+				* CFrame.new(ramp.Size.X / 2, -ramp.Size.Y / 2, 0)
+			local report = BG.scan(root, { world = world })
+			expect(#checks(report, "ledge") == 0 and #checks(report, "slope") == 0, BG.format(report))
+			local lowEnd = ramp.CFrame:PointToWorldSpace(Vector3.new(-8, 0.5, 0))
+			near((lowEnd - edge).Magnitude, 0, 1e-3, "ramp starts at the edge")
+		end
+	end
+end)
+
+test("library VERSION matches the Claude plugin version", function()
+	local fs = require("@lune/fs")
+	local serde = require("@lune/serde")
+	local manifest = serde.decode("json", fs.readFile("claude-plugin/roblox-buildguard/.claude-plugin/plugin.json"))
+	expect(BG.VERSION == manifest.version, ("library %s vs plugin %s"):format(BG.VERSION, manifest.version))
+	local skill = fs.readFile("claude-plugin/roblox-buildguard/skills/roblox-building/SKILL.md")
+	expect(string.find(skill, '"' .. BG.VERSION .. '"', 1, true), "SKILL.md must check for VERSION " .. BG.VERSION)
+end)
+
 print("Config")
 
 test("unknown keys and a nudge not above tolerance are rejected", function()
