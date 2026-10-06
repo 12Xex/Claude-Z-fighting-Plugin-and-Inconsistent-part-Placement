@@ -3,7 +3,7 @@ local roblox = require("@lune/roblox")
 local Harness = require("./harness")
 local FakeWorld = require("./FakeWorld")
 
-local Instance, Vector3, CFrame = roblox.Instance, roblox.Vector3, roblox.CFrame
+local Instance, Vector3, CFrame, Enum = roblox.Instance, roblox.Vector3, roblox.CFrame, roblox.Enum
 local BG = Harness.load()
 -- Project numbers come from the config, so tests follow it when it changes.
 local D = BG.Config.defaults
@@ -381,6 +381,89 @@ test("snapToGrid moves only X and Z", function()
 	near(snapped.LookVector:Dot((CFrame.Angles(0, 0.4, 0)).LookVector), 1, 1e-5, "rotation kept")
 	local v = BG.snapToGrid(Vector3.new(1.9, 2, 2.1))
 	expect(v.X == 0 and v.Z == 4 and v.Y == 2)
+end)
+
+print("Vehicles")
+
+-- A haul truck: 8-wide chassis 1 stud off the ground, 4 cylinder wheels of
+-- radius 1.5 (12 apart), springs and struts, a cab, and a front bumper that
+-- hangs 2 studs ahead of the front axle.
+local function truck(parent)
+	local m = Instance.new("Model")
+	m.Name = "HaulTruck"
+	local function p(name, size, cf, shape)
+		local x = Instance.new("Part")
+		x.Name, x.Size, x.CFrame, x.Anchored = name, size, cf, true
+		if shape then
+			x.Shape = shape
+		end
+		x.Parent = m
+		return x
+	end
+	local chassis = p("Chassis", Vector3.new(8, 2, 16), CFrame.new(0, 2, 0))
+	p("Cab", Vector3.new(8, 6, 5), CFrame.new(0, 6, -5))
+	p("Bed", Vector3.new(8, 4, 10), CFrame.new(0, 5, 3))
+	for _, x in { -4.5, 4.5 } do
+		for _, z in { -6, 6 } do
+			p("Wheel", Vector3.new(1, 3, 3), CFrame.new(x, 1.5, z), Enum.PartType.Cylinder)
+			p("Spring", Vector3.new(0.6, 1.2, 0.6), CFrame.new(x * 0.8, 2.6, z), Enum.PartType.Cylinder)
+			p("Strut", Vector3.new(0.4, 1.5, 0.4), CFrame.new(x * 0.8, 3.2, z + 0.6))
+		end
+	end
+	m.PrimaryPart = chassis
+	m.Parent = parent
+	return m
+end
+
+test("measureVehicle: size, wheels, clearance and angles", function()
+	local root = setup()
+	local v = BG.measureVehicle(truck(root))
+	near(v.width, 10, 1e-3, "width (wheels stick out)")
+	near(v.height, 9, 1e-3, "height: cab top 9 over ground 0")
+	near(v.wheelRadius, 1.5, 1e-3, "wheel radius")
+	near(v.wheelbase, 12, 1e-3, "wheelbase")
+	near(v.groundClearance, 1, 1e-3, "chassis bottom")
+	near(v.approachAngle, math.deg(math.atan2(1, 2)), 1e-2, "front overhang 2, height 1")
+	near(v.breakoverAngle, math.deg(2 * math.atan(2 * 1 / 12)), 1e-2, "breakover")
+end)
+
+test("measureVehicle works whatever way the truck faces", function()
+	local root = setup()
+	local m = truck(root)
+	local turn = CFrame.new(50, 3, 20) * CFrame.Angles(0, math.rad(37), 0)
+	for _, d in m:GetDescendants() do
+		d.CFrame = turn * d.CFrame
+	end
+	local v = BG.measureVehicle(m)
+	near(v.wheelbase, 12, 1e-3)
+	near(v.groundClearance, 1, 1e-3)
+end)
+
+test("checkVehicle flags limits the truck can't meet", function()
+	local root = setup()
+	local text, rows = BG.checkVehicle(truck(root), nil, {})
+	local state = {}
+	for _, r in rows do
+		state[r.key] = r.state
+	end
+	-- Approved maxLedge 1.0 is above half the 1.5 radius but below the radius.
+	expect(state.maxLedge == "check", text)
+	-- 20° slope change is beyond this truck's ~18.9° breakover.
+	expect(state.maxSlopeChange == "fail", text)
+	-- 16 fits one 10-wide truck but not two passing.
+	expect(state.minRoadWidth == "check", text)
+	expect(state.roadHeadroom == "check", text)
+	expect(string.find(text, "breakover", 1, true), text)
+end)
+
+test("measureVehicle needs wheels", function()
+	local root = setup()
+	local m = Instance.new("Model")
+	local x = Instance.new("Part")
+	x.Name = "Box"
+	x.Parent = m
+	m.Parent = root
+	expect(not pcall(BG.measureVehicle, m))
 end)
 
 print("Config")

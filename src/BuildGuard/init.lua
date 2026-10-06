@@ -22,6 +22,7 @@ local Classify = require(script.Classify)
 local Plan = require(script.Plan)
 local Layers = require(script.Layers)
 local TestScene = require(script.TestScene)
+local Vehicle = require(script.Vehicle)
 local ZFight = require(script.Checks.ZFight)
 local Buried = require(script.Checks.Buried)
 local Ground = require(script.Checks.Ground)
@@ -430,6 +431,33 @@ function BuildGuard.describeOverrides(instances)
 		return a.text < b.text
 	end)
 	return out
+end
+
+--------------------------------------------------------------------------------
+-- Vehicles
+--------------------------------------------------------------------------------
+
+-- Measures a vehicle model (see Vehicle.lua for what's measured and how).
+function BuildGuard.measureVehicle(model, options)
+	return Vehicle.measure(model, options)
+end
+
+-- The road limits a measured vehicle needs: { maxLedge, maxSlopeChange,
+-- minRoadWidth, roadHeadroom }. Adopt them with BG.setConfig if you agree.
+function BuildGuard.vehicleLimits(profile)
+	return Vehicle.limits(profile)
+end
+
+-- Measures `model` and compares it with the settings that apply to `target`
+-- (default: workspace in Studio). Returns text, rows.
+function BuildGuard.checkVehicle(model, target, options)
+	local profile = Vehicle.measure(model, options)
+	local config = if target
+		then (BuildGuard.getConfig(target, options))
+		elseif game then (BuildGuard.getConfig(workspace, options))
+		else Config.merge(options and options.config)
+	local rows, text = Vehicle.compare(profile, config)
+	return text, rows, profile
 end
 
 -- One call for agents: the report plus a preview of the fixes (not applied).
