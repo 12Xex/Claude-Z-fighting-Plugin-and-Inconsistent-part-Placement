@@ -1,0 +1,14 @@
+{
+  "name": "buildguard",
+  "description": "BuildGuard: Roblox building rules and checks for Claude",
+  "owner": {
+    "name": "12xex"
+  },
+  "plugins": [
+    {
+      "name": "roblox-buildguard",
+      "source": "./claude-plugin/roblox-buildguard",
+      "description": "Makes Claude build in Roblox Studio without z-fighting, buried roads or bad road joins, and check every build with BuildGuard before calling it done"
+    }
+  ]
+}

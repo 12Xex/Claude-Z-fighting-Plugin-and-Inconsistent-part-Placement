@@ -22,6 +22,24 @@ rojo build default.project.json -o BuildGuard.rbxm
 
 **Library only** (for scripts and agents): `rojo build library.project.json -o BuildGuardLib.rbxm` and insert it into `ServerStorage`. Or press **Install library** in the plugin, which copies it to `ServerStorage.BuildGuard`.
 
+## Claude plugin (so Claude builds with these rules)
+
+This repo is also a Claude Code plugin marketplace. The `roblox-buildguard` plugin gives Claude:
+
+- a **`roblox-building` skill** Claude loads on its own whenever it builds in Studio. It covers using `Layers.place` for details, snapping roads and rails, keeping roads drivable, and running BuildGuard's check before calling a build done.
+- a **`/roblox-buildguard:check [path]`** command: report, preview, then apply fixes only after you say yes.
+
+Setup, once:
+
+1. Connect Claude Code to Roblox Studio's MCP server: in Studio, **Assistant Settings → MCP Servers → Quick connect → Claude Code**.
+2. Install the BuildGuard Studio plugin (above) and press **Install library** in each place you build in.
+3. Install the Claude plugin:
+   ```sh
+   claude plugin marketplace add 12xex/claude-z-fighting-plugin-and-inconsistent-part-placement
+   claude plugin install roblox-buildguard@buildguard
+   ```
+   Or, to try it from a local clone for one session: `claude --plugin-dir ./claude-plugin/roblox-buildguard`.
+
 ## Using the plugin
 
 1. Select a model or folder (or switch scope to Workspace) and press **Scan**. Click any row to select its parts. Red outlines are errors, yellow are warnings.
