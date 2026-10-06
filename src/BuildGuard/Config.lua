@@ -16,9 +16,8 @@
 	drivability limits take the looser one, so a model allowed steeper joins
 	also governs its joins to roads outside it.
 
-	The route numbers (maxLedge, maxRouteSlope, minRoadWidth, gridSize, the
-	lifts and caveEntranceWidth) are the agreed fixed numbers: every road and
-	rail has to pass them so a loaded truck can always climb the route.
+	Project numbers (roads, rails, layers, drivability) were approved for the
+	mining game; see README "Values".
 ]]
 
 local Config = {}
@@ -38,14 +37,18 @@ Config.defaults = {
 
 	-- Layer offsets (road markings, signs, trim) ------------------------------
 	-- Each layer sits this far above the surface it's placed on:
-	-- layer 1 = 0.05, layer 2 = 0.10, ...
+	-- layer 1 = 0.05, layer 2 = 0.1, ...
 	layerLift = 0.05,
 
 	-- Roads / rails / tracks ---------------------------------------------------
-	-- Gap left between a snapped road or track and the ground surface under it.
-	groundLift = 0.1,
-	-- Gap left between a snapped rail and the road bed (or ground) under it.
-	railLift = 0.2,
+	-- Gap left between a snapped part and the surface under it, per kind.
+	roadLift = 0.1,
+	railLift = 0.2, -- rails above their road/track bed
+	trackLift = 0.1,
+	groundLift = 0.1, -- anything else you snap
+	-- Horizontal grid for laying out roads, rails and buildings (BG.snapToGrid).
+	-- Matches Roblox's 4-stud terrain voxels. Never applied to heights or detail.
+	gridSize = 4,
 	-- A road or rail is "off the ground" when its snap would move it more than
 	-- this far, up or down.
 	groundTolerance = 0.1,
@@ -66,17 +69,11 @@ Config.defaults = {
 	-- buried check and snapping.
 	sampleSpacing = 2,
 
-	-- Drivability lint ---------------------------------------------------------
-	maxLedge = 1, -- studs of step between connected road surfaces
-	-- Degrees between connected road surfaces. Matches maxRouteSlope, so a
-	-- flat road may lead straight onto the steepest allowed ramp.
-	maxSlopeChange = 20,
-	-- Steepest a road, rail or track surface may be, in degrees.
-	maxRouteSlope = 20,
-	-- Narrowest a road's top face may be (one truck plus passing room).
-	minRoadWidth = 16,
-	-- Level, square-on road edges must land on multiples of this (0 = off).
-	gridSize = 4,
+	-- Drivability lint (roads and rails) --------------------------------------
+	maxLedge = 1, -- studs of step between connected surfaces (truck-tested)
+	maxRouteSlope = 20, -- degrees: steepest any road/rail surface may tilt
+	maxSlopeChange = 20, -- degrees between connected surfaces (crests, dips)
+	minRoadWidth = 16, -- studs: one truck plus passing room
 	-- Widest a cave entrance may be: minecarts and players fit, trucks don't.
 	caveEntranceWidth = 6,
 	-- Road parts whose top surfaces are within this horizontal distance count
@@ -93,6 +90,8 @@ Config.defaults = {
 		{ kind = "Rail", patterns = { "rail" }, exclude = { "railing", "guardrail", "handrail" } },
 		{ kind = "Road", patterns = { "road", "street", "highway" } },
 	},
+	-- Kinds the drivability lint applies to (pairs are only compared within a kind).
+	drivableKinds = { "Road", "Rail" },
 	-- Parts with these names (case-insensitive) are ground surfaces.
 	groundNames = { "baseplate", "ground", "terrain" },
 	-- Parts with an X and Z footprint at least this big are also ground.
@@ -107,8 +106,11 @@ Config.schema = {
 	zFightNudge = { min = 0.002, max = 0.5, pair = "max" },
 	zFightIgnoreTransparency = { min = 0, max = 1 },
 	layerLift = { min = 0.002, max = 0.5 },
-	groundLift = { min = 0, max = 2 },
+	roadLift = { min = 0, max = 2 },
 	railLift = { min = 0, max = 2 },
+	trackLift = { min = 0, max = 2 },
+	groundLift = { min = 0, max = 2 },
+	gridSize = { min = 0.05, max = 512 },
 	groundTolerance = { min = 0.01, max = 10 },
 	snapSearchUp = { min = 0, max = 1000 },
 	snapSearchDown = { min = 1, max = 10000 },
@@ -120,12 +122,12 @@ Config.schema = {
 	maxSlopeChange = { min = 0, max = 90, pair = "max" },
 	maxRouteSlope = { min = 0, max = 90 },
 	minRoadWidth = { min = 0, max = 1000 },
-	gridSize = { min = 0, max = 1000 },
 	caveEntranceWidth = { min = 0, max = 1000 },
 	connectMargin = { min = 0, max = 5, pair = "max" },
 	connectMaxStep = { min = 0.1, max = 100, pair = "max" },
 	kindNamePatterns = { scope = "global" },
 	groundNames = { scope = "global" },
+	drivableKinds = { scope = "global" },
 	groundMinFootprint = { scope = "global", min = 1, max = 1e6 },
 }
 

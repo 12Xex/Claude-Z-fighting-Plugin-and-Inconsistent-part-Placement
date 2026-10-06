@@ -1,7 +1,15 @@
 --[[
-	Drivability lint for roads. Report only, no fixes.
+	Drivability lint for roads and rails (Config.drivableKinds). Report only,
+	no fixes.
 
-	Two road parts are connected when their top surfaces, seen from above,
+	Per part:
+	  * routeslope: the top surface tilts more than maxRouteSlope
+	  * roadwidth:  a road's top surface is narrower than minRoadWidth,
+	    measured across the direction it's driven: the axis its connected
+	    roads join it along. A piece with joins on both axes (a junction) or
+	    none at all is measured across its shorter side.
+
+	Two parts of the same kind are connected when their top surfaces, seen from above,
 	touch or overlap (within `connectMargin`). For each connected pair this
 	measures, at the junction:
 	  * ledge: the height step between the two top surfaces (> maxLedge flags)
@@ -44,14 +52,37 @@ local function limitNote(ctx, a, b, key, value)
 end
 
 function Drivability.scan(ctx)
+	local drivable = {}
+	for _, kind in ctx.config.drivableKinds do
+		drivable[kind] = true
+	end
 	local roads = {}
+	local issues = {}
 	local marginXZ, marginY = 0, 0
 	for _, s in ctx.solids do
-		if ctx.kindOf(s.part) == "Road" then
-			table.insert(roads, { solid = s, footprint = footprint(s) })
-			local config = ctx.configFor(s.part)
+		local kind = ctx.kindOf(s.part)
+		if kind and drivable[kind] then
+			table.insert(roads, { solid = s, footprint = footprint(s), kind = kind, joins = {} })
+			local config, sources = ctx.configFor(s.part)
 			marginXZ = math.max(marginXZ, config.connectMargin)
 			marginY = math.max(marginY, config.connectMaxStep)
+
+			local tilt = Geometry.tiltDegrees(s)
+			if tilt > config.maxRouteSlope then
+				table.insert(issues, {
+					check = "routeslope",
+					severity = "warning",
+					parts = { s.part },
+					value = tilt,
+					message = ("%s %s slopes %.1f° (limit %.1f°%s)"):format(
+						kind,
+						s.part.Name,
+						tilt,
+						config.maxRouteSlope,
+						if sources.maxRouteSlope then ", set on " .. sources.maxRouteSlope.Name else ""
+					),
+				})
+			end
 		end
 	end
 
@@ -61,7 +92,6 @@ function Drivability.scan(ctx)
 		hash:insert(i, r.solid.min, r.solid.max)
 	end
 
-	local issues = {}
 	for i, ra in roads do
 		local a = ra.solid
 		local near = hash:query(a.min - margin, a.max + margin)
@@ -71,6 +101,9 @@ function Drivability.scan(ctx)
 				continue
 			end
 			local rb = roads[j]
+			if rb.kind ~= ra.kind then
+				continue
+			end
 			local b = rb.solid
 			local config = ctx.pairConfig(a.part, b.part)
 			if Geometry.polygonSeparation(ra.footprint, rb.footprint) > config.connectMargin then
@@ -88,6 +121,8 @@ function Drivability.scan(ctx)
 			end
 			local angle = math.deg(math.acos(math.clamp(a.axes[2]:Dot(b.axes[2]), -1, 1)))
 			local at = Vector3.new(jx, math.max(ya, yb), jz)
+			table.insert(ra.joins, at)
+			table.insert(rb.joins, at)
 			if step > config.maxLedge then
 				table.insert(issues, {
 					check = "ledge",
@@ -117,6 +152,45 @@ function Drivability.scan(ctx)
 						b.part.Name,
 						config.maxSlopeChange,
 						limitNote(ctx, a.part, b.part, "maxSlopeChange", config.maxSlopeChange)
+					),
+				})
+			end
+		end
+	end
+	-- Road width, across the driving direction.
+	for _, r in roads do
+		if r.kind == "Road" then
+			local s = r.solid
+			local config, sources = ctx.configFor(s.part)
+			local alongX, alongZ = false, false
+			for _, at in r.joins do
+				local lp = s.cf:PointToObjectSpace(at)
+				-- Which end/side of the piece is this join nearest to?
+				if math.abs(lp.X) / s.half.X >= math.abs(lp.Z) / s.half.Z then
+					alongX = true
+				else
+					alongZ = true
+				end
+			end
+			local width
+			if alongX and not alongZ then
+				width = s.size.Z
+			elseif alongZ and not alongX then
+				width = s.size.X
+			else
+				width = math.min(s.size.X, s.size.Z)
+			end
+			if width < config.minRoadWidth - 1e-3 then
+				table.insert(issues, {
+					check = "roadwidth",
+					severity = "warning",
+					parts = { s.part },
+					value = width,
+					message = ("Road %s is %.1f studs wide (minimum %.1f%s)"):format(
+						s.part.Name,
+						width,
+						config.minRoadWidth,
+						if sources.minRoadWidth then ", set on " .. sources.minRoadWidth.Name else ""
 					),
 				})
 			end

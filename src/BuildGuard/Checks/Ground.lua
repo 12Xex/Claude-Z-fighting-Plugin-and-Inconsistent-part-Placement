@@ -3,8 +3,9 @@
 
 	Snapping a road/rail/track raycasts straight down from a grid of points across
 	its bottom, starting above the part (so a sunk part still finds the surface over
-	it), and moves the part vertically so its lowest point sits `groundLift`
-	(`railLift` for rails) above the highest ground hit. "Ground" is terrain, or a part that starts
+	it), and moves the part vertically so its lowest point sits its kind's
+	lift (roadLift / railLift / trackLift, else groundLift) above the highest
+	ground hit. "Ground" is terrain, or a part that starts
 	below the snapped part's bottom (see `ignoreFor`).
 
 	Layered items (markings, signs) on the part's top move with it.
@@ -69,6 +70,8 @@ local function riders(s, ctx)
 	return out
 end
 
+local LIFT_KEY = { Road = "roadLift", Rail = "railLift", Track = "trackLift" }
+
 -- Works out how far `s` must move vertically to sit on the ground.
 -- Returns { delta = number } or { skip = reason }.
 function Ground.measure(s, ctx)
@@ -77,8 +80,8 @@ function Ground.measure(s, ctx)
 	if tilt > config.flatTiltDegrees then
 		return { skip = ("tilted %.1f°, treated as a ramp"):format(tilt) }
 	end
-	local lift = if ctx.kindOf(s.part) == "Rail" then config.railLift else config.groundLift
 	local ignore = Ground.ignoreFor(s, ctx)
+	local lift = config[LIFT_KEY[ctx.kindOf(s.part)] or "groundLift"]
 	local startY = s.max.Y + config.snapSearchUp
 	local best, hits = -math.huge, 0
 	for _, p in Geometry.faceSamples(s, "Bottom", 0.05, 0.25, config.sampleSpacing) do
