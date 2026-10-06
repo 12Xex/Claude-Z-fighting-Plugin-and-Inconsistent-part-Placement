@@ -36,6 +36,7 @@
 | `slope` | warning | Angle between connected roads (or rails) over `maxSlopeChange` | Manual |
 | `routeslope` | warning | A road or rail piece tilts more than `maxRouteSlope` | Manual |
 | `roadwidth` | warning | A road is narrower than `minRoadWidth` across its driving direction | Manual |
+| `cave` | warning | A cave entrance marker's `Size.X` is over `caveEntranceWidth` | Manual |
 
 ## Settings you can override per model
 
@@ -61,6 +62,7 @@ Set with `BG.setConfig`, stored as `BuildGuard_<key>` attributes. "Pair" is how 
 | `maxSlopeChange` | 20 | 0–90 | looser (max) | Angle between connected roads/rails |
 | `maxRouteSlope` | 20 | 0–90 | — | Steepest tilt of any road/rail piece |
 | `minRoadWidth` | 16 | 0–1000 | — | Road width across the driving direction |
+| `caveEntranceWidth` | 6 | 0–1000 | — | Widest cave entrance |
 | `connectMargin` | 0.1 | 0–5 | max | Horizontal gap still counted as connected |
 | `connectMaxStep` | 4 | 0.1–100 | max | Bigger vertical gaps are overpasses |
 
@@ -70,6 +72,7 @@ Set with `BG.setConfig`, stored as `BuildGuard_<key>` attributes. "Pair" is how 
 |---|---|
 | `BuildGuardKind` = `"Road"` / `"Rail"` / `"Track"` / `"None"` | Sets or clears the kind (overrides the name) |
 | `BuildGuardGround = true` | Counts as ground (like Baseplate/Terrain) |
+| `BuildGuardCaveEntrance = true` / `false` | Marks (or unmarks) a cave entrance marker. Names containing `CaveEntrance` (spaces and underscores ignored) are markers too. |
 | `BuildGuardLocked = true` | Fixes never move it (also true for `Locked` parts and ground) |
 | `BuildGuardIgnore = true` | It and its descendants are skipped |
 | `BuildGuardLayer` | Set by `Layers.place`. Marks layered items. |

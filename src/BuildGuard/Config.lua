@@ -74,6 +74,8 @@ Config.defaults = {
 	maxRouteSlope = 20, -- degrees: steepest any road/rail surface may tilt
 	maxSlopeChange = 20, -- degrees between connected surfaces (crests, dips)
 	minRoadWidth = 16, -- studs: one truck plus passing room
+	-- Widest a cave entrance may be: minecarts and players fit, trucks don't.
+	caveEntranceWidth = 6,
 	-- Road parts whose top surfaces are within this horizontal distance count
 	-- as connected.
 	connectMargin = 0.1,
@@ -120,6 +122,7 @@ Config.schema = {
 	maxSlopeChange = { min = 0, max = 90, pair = "max" },
 	maxRouteSlope = { min = 0, max = 90 },
 	minRoadWidth = { min = 0, max = 1000 },
+	caveEntranceWidth = { min = 0, max = 1000 },
 	connectMargin = { min = 0, max = 5, pair = "max" },
 	connectMaxStep = { min = 0.1, max = 100, pair = "max" },
 	kindNamePatterns = { scope = "global" },
@@ -231,7 +234,11 @@ function Config.resolver(base)
 			local ok, message = checkNudge(merged)
 			if ok then
 				config, sources = merged, mergedSources
-				table.insert(self.owners, instance)
+				-- table.find compares with ==, so an instance reached twice through
+				-- different references (Lune doesn't reuse them) is listed once.
+				if not table.find(self.owners, instance) then
+					table.insert(self.owners, instance)
+				end
 			else
 				table.insert(self.errors, { instance = instance, attribute = "BuildGuard_zFightNudge", message = message })
 			end

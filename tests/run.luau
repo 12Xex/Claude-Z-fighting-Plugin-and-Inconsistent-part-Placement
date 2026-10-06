@@ -204,9 +204,11 @@ print("Buried / snap to ground")
 
 test("scan accepts a list of roots and de-duplicates", function()
 	local root, world, part = setup()
-	part("Wall", Vector3.new(10, 10, 1), CFrame.new(0, 5, 0))
-	part("Sign", Vector3.new(2, 2, 0.4), CFrame.new(0, 5, -0.3))
-	local report = BG.scan({ root.Wall, root.Sign, root.Sign }, { world = world })
+	-- Hold the references: Lune hands out a new userdata on every instance
+	-- lookup (root.Sign ~= root.Sign as table keys), Roblox doesn't.
+	local wall = part("Wall", Vector3.new(10, 10, 1), CFrame.new(0, 5, 0))
+	local sign = part("Sign", Vector3.new(2, 2, 0.4), CFrame.new(0, 5, -0.3))
+	local report = BG.scan({ wall, sign, sign }, { world = world })
 	expect(report.partCount == 2 and #checks(report, "zfight") == 1)
 end)
 
@@ -370,6 +372,19 @@ test("snapToGrid moves only X and Z", function()
 	near(snapped.LookVector:Dot((CFrame.Angles(0, 0.4, 0)).LookVector), 1, 1e-5, "rotation kept")
 	local v = BG.snapToGrid(Vector3.new(1.9, 2, 2.1))
 	expect(v.X == 0 and v.Z == 4 and v.Y == 2)
+end)
+
+test("cave: entrance markers wider than caveEntranceWidth are flagged", function()
+	local root, world, part = setup()
+	local width = BG.Config.defaults.caveEntranceWidth
+	part("CaveEntrance_Mine", Vector3.new(width, 8, 2), CFrame.new(0, 4, 0))
+	part("Cave Entrance Wide", Vector3.new(width + 2, 8, 2), CFrame.new(20, 4, 0))
+	local tunnel = part("Tunnel", Vector3.new(width + 2, 8, 2), CFrame.new(40, 4, 0))
+	local cave = checks(BG.scan(root, { world = world }), "cave")
+	expect(#cave == 1 and cave[1].parts[1].Name == "Cave Entrance Wide", "name match, spaces ignored")
+	tunnel:SetAttribute("BuildGuardCaveEntrance", true)
+	expect(#checks(BG.scan(root, { world = world }), "cave") == 2, "attribute marks it too")
+	expect(#checks(BG.scan(root, { world = world, config = { caveEntranceWidth = 10 } }), "cave") == 0, "config respected")
 end)
 
 print("Config")

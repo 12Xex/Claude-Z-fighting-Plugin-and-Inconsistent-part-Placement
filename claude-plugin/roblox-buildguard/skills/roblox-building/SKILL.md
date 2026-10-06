@@ -1,6 +1,6 @@
 ---
 name: roblox-building
-description: Rules for building or editing parts in a Roblox place through a Roblox Studio MCP server (run_code or similar). Use whenever creating, moving or detailing parts, models, roads, rails, signs, markings or trim in Studio. Covers z-fighting, layering details on surfaces, snapping roads/rails to the ground, setting per-model BuildGuard config for what is being built, and checking the build before finishing.
+description: Rules for building or editing parts in a Roblox place through a Roblox Studio MCP server (run_code or similar). Use whenever creating, moving or detailing parts, models, roads, rails, signs, markings, trim or cave entrances in Studio. Covers z-fighting, layering details on surfaces, snapping roads/rails to the ground, setting per-model BuildGuard config for what is being built, and checking the build before finishing.
 ---
 
 # Building in Roblox Studio with BuildGuard
@@ -42,6 +42,7 @@ If it's missing, stop and ask the user to install the BuildGuard Studio plugin a
 
   Check the limits for a model with `print(BG.explainConfig(workspace.YourBuild))`. To climb more than 20°, build switchbacks; don't make a steeper ramp.
 - **Lay out roads, rails and buildings on the 4-stud grid:** `part.CFrame = BG.snapToGrid(cf)`. This rounds X and Z only. Heights come from the snap and from layers, so never round heights or small detail to the grid.
+- **Cave entrances are at most 6 studs wide**, so minecarts and players fit and trucks don't. Mark each one with a part filling the opening: name it `CaveEntrance…` (or set `BuildGuardCaveEntrance = true`), Transparency 1, CanCollide off, with its local X spanning the opening's width. The check measures that part.
 - Set `Size` and `CFrame` before `Parent`, and anchor static parts.
 - Do the build in a few `run_code` calls, not one per part, and `print` what you made so you can see it.
 

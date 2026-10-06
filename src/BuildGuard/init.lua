@@ -26,6 +26,7 @@ local ZFight = require(script.Checks.ZFight)
 local Buried = require(script.Checks.Buried)
 local Ground = require(script.Checks.Ground)
 local Drivability = require(script.Checks.Drivability)
+local Cave = require(script.Checks.Cave)
 
 local BuildGuard = {}
 
@@ -38,7 +39,7 @@ BuildGuard.TestScene = TestScene
 
 local SEVERITY_ORDER = { error = 1, warning = 2 }
 local CHECK_ORDER =
-	{ config = 0, buried = 1, offground = 2, zfight = 3, ledge = 4, slope = 5, routeslope = 6, roadwidth = 7 }
+	{ config = 0, buried = 1, offground = 2, zfight = 3, ledge = 4, slope = 5, routeslope = 6, roadwidth = 7, cave = 8 }
 
 local function defaultWorld()
 	if game then
@@ -108,6 +109,7 @@ function BuildGuard.scan(root, options)
 	add(Ground.scan(ctx, flagged))
 	add(ZFight.scan(ctx))
 	add(Drivability.scan(ctx))
+	add(Cave.scan(ctx))
 	-- Invalid BuildGuard_ attributes found while resolving (they're ignored,
 	-- and the part falls back to its parent's settings).
 	local badConfig = {}

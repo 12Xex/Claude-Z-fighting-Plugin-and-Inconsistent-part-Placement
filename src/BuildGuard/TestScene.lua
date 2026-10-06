@@ -19,6 +19,7 @@
 	  P10 Road_C_Steep       slope      flag  road joined to another at more than maxSlopeChange
 	  P11 Road_C_Steep       routeslope flag  the same road tilts more than maxRouteSlope
 	  P12 Road_Narrow        roadwidth  flag  road narrower than minRoadWidth
+	  P13 CaveEntrance_Wide  cave       flag  cave entrance wider than caveEntranceWidth
 
 	Every size and height comes from the config (road width, lifts, limits),
 	so the scene plants real violations and real non-violations whatever
@@ -147,6 +148,14 @@ function TestScene.build(parent, world, config, origin)
 	for _, z in { -0.7, 0.7 } do
 		control(part("Rail_OnBed", Vector3.new(23, 0.3, 0.3), CFrame.new(-40, bedTop + config.railLift + 0.15, 105 + z), Color3.fromRGB(110, 110, 120), Enum.Material.Metal))
 	end
+
+	-- Cave entrance markers (invisible, filling the opening): one too wide for
+	-- the limit, one at it.
+	local wide = part("CaveEntrance_Wide", Vector3.new(config.caveEntranceWidth + 4, 8, 2), CFrame.new(-100, 4, 0), Color3.fromRGB(80, 80, 80))
+	wide.Transparency = 1
+	plant(wide, "P13", "cave", "flag", ("%g studs wide"):format(config.caveEntranceWidth + 4))
+	local mine = control(part("CaveEntrance_Mine", Vector3.new(config.caveEntranceWidth, 8, 2), CFrame.new(-100, 4, 20), Color3.fromRGB(80, 80, 80)))
+	mine.Transparency = 1
 
 	-- Per-model override: MountainPass allows its own steep road.
 	local pass = Instance.new("Model")

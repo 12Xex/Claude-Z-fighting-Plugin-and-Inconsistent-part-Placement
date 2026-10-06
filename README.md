@@ -9,7 +9,8 @@ A Roblox Studio plugin (and a library you can call from the command bar or MCP `
 | **Buried-part check** | Samples every road/rail/track top surface every 2 studs and flags any spot under terrain or another part | Snap onto the ground if the cover is terrain or ground; otherwise flagged for a person to decide |
 | **Snap to ground** | Raycasts down under roads/rails/tracks and puts them their kind's lift above the surface (roads 0.1, rails 0.2) | Preview, then apply (undoable) |
 | **Drivability lint** | For roads and rails: ledges above `maxLedge` and slope changes above `maxSlopeChange` between connected pieces, any piece steeper than `maxRouteSlope`, and roads narrower than `minRoadWidth` | Report only |
-| **Test scene + self-test** | Builds a messy scene with 12 planted problems and proves each one is found, then fixed (or still flagged, for lint and manual cases) | — |
+| **Cave entrance lint** | Flags cave entrance markers wider than `caveEntranceWidth` | Report only |
+| **Test scene + self-test** | Builds a messy scene with 13 planted problems and proves each one is found, then fixed (or still flagged, for lint and manual cases) | — |
 
 ## Install
 
@@ -70,6 +71,7 @@ print(BG.selfTest().text)                  -- planted-problem self-test
 ## How parts are classified
 
 - **Road / Rail / Track:** the `BuildGuardKind` attribute (`"Road"`, `"Rail"`, `"Track"` or `"None"`), then a CollectionService tag with the same name, then the part's name (`road`, `street`, `highway`; `rail` but not `railing`/`guardrail`/`handrail`; `track`). Each road's driving surface is its **Top (+Y) face**.
+- **Cave entrance:** a marker part filling the opening, named `CaveEntrance…` or with `BuildGuardCaveEntrance = true`. Its `Size.X` is the opening's width.
 - **Ground:** Terrain, parts named `Baseplate`/`Ground`/`Terrain`, parts with `BuildGuardGround = true`, or anything at least 512×512 studs.
 - **Layered items:** anything placed with `Layers.place` (it sets `BuildGuardLayer`). These never count as covering a road, and they move with the road when it's snapped.
 - **Never moved by fixes:** ground parts, `Locked` parts, and parts with `BuildGuardLocked = true`.
@@ -97,6 +99,7 @@ Project numbers (approved for the mining game):
 | `railLift` | 0.2 | Rails above their road/track bed |
 | `roadLift` | 0.1 | Roads above the ground |
 | `layerLift` | 0.05 | Lift per decal/marking layer |
+| `caveEntranceWidth` | 6 | Widest cave entrance: minecarts and players fit, trucks don't |
 
 Engine values:
 

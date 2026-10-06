@@ -48,6 +48,18 @@ function Classify.isLayered(part)
 	return part:GetAttribute("BuildGuardLayer") ~= nil
 end
 
+-- Cave entrance markers: a part filling the opening, its local X spanning
+-- the opening's width. BuildGuardCaveEntrance = true, or a name containing
+-- "CaveEntrance" (spaces and underscores ignored).
+function Classify.isCaveEntrance(part)
+	local attribute = part:GetAttribute("BuildGuardCaveEntrance")
+	if attribute ~= nil then
+		return attribute == true
+	end
+	local name = string.gsub(string.lower(part.Name), "[%s_]", "")
+	return string.find(name, "caveentrance", 1, true) ~= nil
+end
+
 -- Terrain, baseplates and other big ground surfaces.
 function Classify.isGroundLike(instance, config)
 	if instance:IsA("Terrain") then
