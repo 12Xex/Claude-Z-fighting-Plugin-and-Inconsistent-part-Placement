@@ -466,6 +466,31 @@ test("measureVehicle needs wheels", function()
 	expect(not pcall(BG.measureVehicle, m))
 end)
 
+test("fixes keep Welds/Motor6Ds in step, and revert restores them", function()
+	local root, world = setup()
+	local m = truck(root)
+	local chassis = m.Chassis
+	local strut = Instance.new("Part")
+	strut.Name, strut.Size, strut.CFrame, strut.Anchored = "Strut_X", Vector3.new(1, 1.5, 1), CFrame.new(3.5, 1.5, -2), true
+	strut.Parent = m
+	local weld = Instance.new("Motor6D")
+	weld.Part0, weld.Part1 = chassis, strut
+	weld.C0 = chassis.CFrame:Inverse() * strut.CFrame
+	weld.Parent = strut
+	local before = weld.C1
+	local report = BG.scan(m, { world = world })
+	local plan = BG.planFixes(report)
+	expect(string.find(BG.Plan.describe(plan), "keeps 1 joint(s) in step", 1, true), BG.Plan.describe(plan))
+	BG.apply(plan)
+	local function holds()
+		return ((chassis.CFrame * weld.C0).Position - (strut.CFrame * weld.C1).Position).Magnitude < 1e-4
+	end
+	expect(strut.CFrame.Position.X > 3.5 + 0.01, "strut nudged")
+	expect(holds(), "joint updated to hold the nudged strut")
+	BG.revert(plan)
+	expect(holds() and (weld.C1.Position - before.Position).Magnitude < 1e-6, "revert restores C1")
+end)
+
 print("Config")
 
 test("unknown keys and a nudge not above tolerance are rejected", function()

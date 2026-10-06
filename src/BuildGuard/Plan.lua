@@ -61,10 +61,73 @@ function Plan.staleParts(plan)
 	return stale
 end
 
+-- Welds and Motor6Ds (JointInstance) and WeldConstraints holding `part`.
+-- Attachment-based constraints (springs, hinges) move with their part and
+-- need nothing.
+function Plan.jointsOf(part)
+	local out = {}
+	local function consider(j)
+		if j:IsA("JointInstance") or j:IsA("WeldConstraint") then
+			if j.Part0 == part or j.Part1 == part then
+				table.insert(out, j)
+			end
+		end
+	end
+	local ok, joints = pcall(function()
+		return part:GetJoints()
+	end)
+	if ok and joints then
+		for _, j in joints do
+			consider(j)
+		end
+		return out
+	end
+	-- Outside Studio: joints live in the part's model (or next to it).
+	local scope = part.Parent
+	local node = part.Parent
+	while node do
+		if node:IsA("Model") then
+			scope = node
+			break
+		end
+		node = node.Parent
+	end
+	if scope then
+		for _, d in scope:GetDescendants() do
+			consider(d)
+		end
+	end
+	return out
+end
+
+-- Applies the plan. Joints on moved parts are updated so they hold the parts
+-- where the plan put them (otherwise a Weld or Motor6D pulls a nudged strut
+-- back when the game runs).
 function Plan.apply(plan)
 	for _, item in plan.items do
 		item.part.Size = item.toSize
 		item.part.CFrame = item.toCFrame
+	end
+	plan.joints = {}
+	local seen = {}
+	for _, item in plan.items do
+		for _, joint in Plan.jointsOf(item.part) do
+			if not seen[joint] then
+				seen[joint] = true
+				if joint:IsA("JointInstance") then
+					if joint.Part0 and joint.Part1 then
+						table.insert(plan.joints, { joint = joint, c0 = joint.C0, c1 = joint.C1 })
+						-- A joint holds Part0.CFrame * C0 == Part1.CFrame * C1.
+						joint.C1 = joint.Part1.CFrame:Inverse() * joint.Part0.CFrame * joint.C0
+					end
+				elseif joint.Enabled then
+					-- A WeldConstraint records the offset when it's enabled.
+					table.insert(plan.joints, { joint = joint })
+					joint.Enabled = false
+					joint.Enabled = true
+				end
+			end
+		end
 	end
 end
 
@@ -72,6 +135,15 @@ function Plan.revert(plan)
 	for _, item in plan.items do
 		item.part.Size = item.fromSize
 		item.part.CFrame = item.fromCFrame
+	end
+	for _, saved in plan.joints or {} do
+		if saved.c1 then
+			saved.joint.C0 = saved.c0
+			saved.joint.C1 = saved.c1
+		else
+			saved.joint.Enabled = false
+			saved.joint.Enabled = true
+		end
 	end
 end
 
@@ -91,6 +163,10 @@ function Plan.describeItem(item)
 	end
 	if #parts == 0 then
 		table.insert(parts, "no change")
+	end
+	local joints = #Plan.jointsOf(item.part)
+	if joints > 0 then
+		table.insert(parts, ("keeps %d joint(s) in step"):format(joints))
 	end
 	return ("%s: %s — %s"):format(item.part:GetFullName(), table.concat(parts, ", "), item.reason)
 end

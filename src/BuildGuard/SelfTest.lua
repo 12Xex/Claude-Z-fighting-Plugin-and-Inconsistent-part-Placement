@@ -138,6 +138,22 @@ function SelfTest.run(BuildGuard, options)
 			row(false, "left over after fixing: " .. issue.message)
 		end
 	end
+	local jointsOk, joints, broken = true, 0, nil
+	for _, d in root:GetDescendants() do
+		if d:IsA("JointInstance") and d.Part0 and d.Part1 then
+			joints += 1
+			local a = (d.Part0.CFrame * d.C0).Position
+			local b = (d.Part1.CFrame * d.C1).Position
+			if (a - b).Magnitude > 1e-3 then
+				jointsOk, broken = false, d
+			end
+		end
+	end
+	row(
+		jointsOk and joints > 0,
+		("joints     all %d weld(s) still hold their parts where they are"):format(joints)
+			.. (if broken then " (" .. broken:GetFullName() .. " doesn't)" else "")
+	)
 	local controlsOk, movedControl = sameAs(controlState)
 	row(controlsOk, "controls   no control part moved" .. (if movedControl then " (" .. movedControl.Name .. " moved)" else ""))
 

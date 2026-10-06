@@ -41,6 +41,8 @@ If it's missing, stop and ask the user to install the BuildGuard Studio plugin a
   - at most a **1-stud step** and a **20° angle change** where two pieces join.
 
   Check the limits for a model with `print(BG.explainConfig(workspace.YourBuild))`. To climb more than 20°, build switchbacks; don't make a steeper ramp.
+- **Tunnels and caves:** build the tunnel floor first, then snap roads and rails onto it. Snapping finds the tunnel floor, not the mountain above. A road or rail buried deeper than 20 studs isn't moved; carve its tunnel instead. Set the headroom the vehicles need on the tunnel's model, for example `BG.setConfig(mine, { roadHeadroom = 14 }, "13-stud haul truck")`.
+- **Vehicles (trucks, minecarts):** before building their roads, measure them: `print(BG.checkVehicle(workspace.HaulTruck))`. Show the user every `FAIL` and `check` line; don't change the project limits without their OK. Name wheels `Wheel…`/`Tire…` (or set `BuildGuardWheel = true`), and set the model's `PrimaryPart` to the chassis with its front facing -Z. Joint suspension parts (springs, struts) with Welds, Motor6Ds or attachment constraints. Fixes keep Welds and Motor6Ds in step automatically.
 - **Lay out roads, rails and buildings on the 4-stud grid:** `part.CFrame = BG.snapToGrid(cf)`. This rounds X and Z only. Heights come from the snap and from layers, so never round heights or small detail to the grid.
 - Set `Size` and `CFrame` before `Parent`, and anchor static parts.
 - Do the build in a few `run_code` calls, not one per part, and `print` what you made so you can see it.
@@ -59,8 +61,9 @@ BG.clearConfig(workspace.MountainPass, { "maxSlopeChange" })   -- or clearConfig
 - Settings apply to the instance and everything under it, and the nearest one wins. A part can override its model, and `workspace` holds place-wide settings.
 - Use the narrowest instance that needs it: one model, not `workspace`.
 - A reason is required. It's shown in every report next to the override, so write it for the user.
-- **Never loosen a limit just to make a report pass.** Only change a limit when the design calls for it. If something fails because the build is wrong, fix the build. Don't loosen z-fighting settings at all.
-- Joins between two parts: z-fighting uses the stricter of the two parts' settings. Ledge and slope limits use the looser, so a model you loosen also governs where it joins other roads. Mention that to the user when it applies.
+- **Never loosen a limit just to make a report pass.** Only change a limit when the design calls for it. If something fails because the build is wrong, fix the build.
+- Z-fighting detection can't be changed per model; attempts are reported as errors. Only the nudge size can be set.
+- A join between two pieces uses the settings of the smallest model holding both. Overrides on your model cover joins inside it. Where it meets roads outside it, the outside limits apply, so build those joins to the outside limits.
 - Only the keys in the reference's settings table can be set per model. Classification (name patterns, ground names) stays in `Config.lua`.
 
 ## 3. Before saying the build is done
@@ -78,6 +81,6 @@ local result = BG.fixAll(workspace.YourBuild)
 print(BG.format(result.report))
 ```
 
-The build is only done when the final report shows **0 errors**. Invalid config attributes also count as errors. Tell the user about every line under "Config overrides in effect". Warnings left over (ledges, slopes, roads under non-ground parts) must be fixed in the build, or listed to the user by name with the reason. Never say a build is clean without having run the check.
+The build is only done when the final report shows **0 errors**. Invalid config attributes also count as errors. Tell the user about every line under "Config overrides in effect". Warnings left over (ledges, slopes, headroom, roads under non-ground parts) must be fixed in the build, or listed to the user by name with the reason. Never say a build is clean without having run the check.
 
 For the full API and what each check means, see [reference.md](reference.md).

@@ -24,6 +24,8 @@
 	                                          floor, not the roof (final height is checked)
 	  P14 Road_Tunnel        headroom   flag  tunnel roof lower than the MineTunnel model's
 	                                          roadHeadroom
+	  P15 Strut_FL           zfight     fix   truck strut welded flush to the chassis side; the
+	                                          weld must be updated to hold the nudged strut
 
 	Every size and height comes from the config (road width, lifts, limits),
 	so the scene plants real violations and real non-violations whatever
@@ -175,6 +177,31 @@ function TestScene.build(parent, world, config, origin)
 	planted[#planted].expectBottomY = origin.Y + config.roadLift
 	table.insert(planted, { id = "P14", part = tunnelRoad, check = "headroom", expect = "flag", note = "roof 12 up, needs 14" })
 	control(part("Rail_Tunnel", Vector3.new(20, 0.5, 1), CFrame.new(102, railY, 9), Color3.fromRGB(110, 110, 120), Enum.Material.Metal)).Parent = mine
+
+	-- Haul truck with a strut welded flush against the chassis side.
+	local truck = Instance.new("Model")
+	truck.Name = "HaulTruck"
+	truck.Parent = folder
+	local chassis = part("Chassis", Vector3.new(8, 2, 16), CFrame.new(-100, 2, 0), Color3.fromRGB(230, 170, 30), Enum.Material.Metal)
+	chassis.Parent = truck
+	part("Cab", Vector3.new(8, 6, 5), CFrame.new(-100, 6, -5), Color3.fromRGB(230, 170, 30), Enum.Material.Metal).Parent = truck
+	for _, x in { -4.5, 4.5 } do
+		for _, z in { -6, 6 } do
+			local wheel = part("Wheel", Vector3.new(1, 3, 3), CFrame.new(-100 + x, 1.5, z), Color3.fromRGB(30, 30, 30))
+			wheel.Shape = Enum.PartType.Cylinder
+			wheel.Parent = truck
+		end
+	end
+	local strut = part("Strut_FL", Vector3.new(1, 2, 1), CFrame.new(-100 + 3.5, 1.5, -3), Color3.fromRGB(120, 120, 130), Enum.Material.Metal)
+	strut.Parent = truck
+	local weld = Instance.new("Weld")
+	weld.Name = "StrutWeld"
+	weld.Part0 = chassis
+	weld.Part1 = strut
+	weld.C0 = chassis.CFrame:Inverse() * strut.CFrame
+	weld.Parent = strut
+	plant(strut, "P15", "zfight", "fix", "welded flush to the chassis")
+	truck.PrimaryPart = chassis
 
 	-- Per-model override: MountainPass allows its own steep road.
 	local pass = Instance.new("Model")
