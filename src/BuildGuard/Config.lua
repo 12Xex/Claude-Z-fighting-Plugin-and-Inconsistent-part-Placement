@@ -16,7 +16,9 @@
 	drivability limits take the looser one, so a model allowed steeper joins
 	also governs its joins to roads outside it.
 
-	Values marked PROVISIONAL are placeholders that still need sign-off.
+	The route numbers (maxLedge, maxRouteSlope, minRoadWidth, gridSize, the
+	lifts and caveEntranceWidth) are the agreed fixed numbers: every road and
+	rail has to pass them so a loaded truck can always climb the route.
 ]]
 
 local Config = {}
@@ -36,12 +38,14 @@ Config.defaults = {
 
 	-- Layer offsets (road markings, signs, trim) ------------------------------
 	-- Each layer sits this far above the surface it's placed on:
-	-- layer 1 = 0.02, layer 2 = 0.04, ...
-	layerLift = 0.02,
+	-- layer 1 = 0.05, layer 2 = 0.10, ...
+	layerLift = 0.05,
 
 	-- Roads / rails / tracks ---------------------------------------------------
-	-- Gap left between a snapped road or rail and the ground surface under it.
-	groundLift = 0.05,
+	-- Gap left between a snapped road or track and the ground surface under it.
+	groundLift = 0.1,
+	-- Gap left between a snapped rail and the road bed (or ground) under it.
+	railLift = 0.2,
 	-- A road or rail is "off the ground" when its snap would move it more than
 	-- this far, up or down.
 	groundTolerance = 0.1,
@@ -62,10 +66,19 @@ Config.defaults = {
 	-- buried check and snapping.
 	sampleSpacing = 2,
 
-	-- Drivability lint (roads only) -------------------------------------------
-	-- PROVISIONAL: replace with the agreed numbers.
-	maxLedge = 0.5, -- studs of step between connected road surfaces
-	maxSlopeChange = 15, -- degrees between connected road surfaces
+	-- Drivability lint ---------------------------------------------------------
+	maxLedge = 1, -- studs of step between connected road surfaces
+	-- Degrees between connected road surfaces. Matches maxRouteSlope, so a
+	-- flat road may lead straight onto the steepest allowed ramp.
+	maxSlopeChange = 20,
+	-- Steepest a road, rail or track surface may be, in degrees.
+	maxRouteSlope = 20,
+	-- Narrowest a road's top face may be (one truck plus passing room).
+	minRoadWidth = 16,
+	-- Level, square-on road edges must land on multiples of this (0 = off).
+	gridSize = 4,
+	-- Widest a cave entrance may be: minecarts and players fit, trucks don't.
+	caveEntranceWidth = 6,
 	-- Road parts whose top surfaces are within this horizontal distance count
 	-- as connected.
 	connectMargin = 0.1,
@@ -95,6 +108,7 @@ Config.schema = {
 	zFightIgnoreTransparency = { min = 0, max = 1 },
 	layerLift = { min = 0.002, max = 0.5 },
 	groundLift = { min = 0, max = 2 },
+	railLift = { min = 0, max = 2 },
 	groundTolerance = { min = 0.01, max = 10 },
 	snapSearchUp = { min = 0, max = 1000 },
 	snapSearchDown = { min = 1, max = 10000 },
@@ -104,6 +118,10 @@ Config.schema = {
 	sampleSpacing = { min = 0.25, max = 50 },
 	maxLedge = { min = 0, max = 50, pair = "max" },
 	maxSlopeChange = { min = 0, max = 90, pair = "max" },
+	maxRouteSlope = { min = 0, max = 90 },
+	minRoadWidth = { min = 0, max = 1000 },
+	gridSize = { min = 0, max = 1000 },
+	caveEntranceWidth = { min = 0, max = 1000 },
 	connectMargin = { min = 0, max = 5, pair = "max" },
 	connectMaxStep = { min = 0.1, max = 100, pair = "max" },
 	kindNamePatterns = { scope = "global" },
@@ -214,7 +232,11 @@ function Config.resolver(base)
 			local ok, message = checkNudge(merged)
 			if ok then
 				config, sources = merged, mergedSources
-				table.insert(self.owners, instance)
+				-- table.find compares with ==, so an instance reached twice through
+				-- different references (Lune doesn't reuse them) is listed once.
+				if not table.find(self.owners, instance) then
+					table.insert(self.owners, instance)
+				end
 			else
 				table.insert(self.errors, { instance = instance, attribute = "BuildGuard_zFightNudge", message = message })
 			end

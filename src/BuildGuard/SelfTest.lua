@@ -117,7 +117,8 @@ function SelfTest.run(BuildGuard, options)
 	for _, issue in after.issues do
 		local expected = false
 		for _, p in scene.planted do
-			if p.expect == "flag" and issue.check == p.check and table.find(issue.parts, p.part) then
+			local planted = p.expect == "flag" and (issue.check == p.check or (p.also and table.find(p.also, issue.check)))
+			if planted and table.find(issue.parts, p.part) then
 				expected = true
 			end
 		end

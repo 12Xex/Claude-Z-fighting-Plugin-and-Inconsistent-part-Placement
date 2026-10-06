@@ -1,5 +1,6 @@
 --[[
-	BuildGuard: catches z-fighting, buried roads/rails and bad road joins in
+	BuildGuard: catches z-fighting, buried roads/rails, bad road joins and
+	routes that break the fixed numbers (grade, width, grid, cave entrances) in
 	Roblox builds, and fixes what can be fixed safely.
 
 	Every fix is a plan first: scan, preview the plan, then apply it (one undo
@@ -26,6 +27,7 @@ local ZFight = require(script.Checks.ZFight)
 local Buried = require(script.Checks.Buried)
 local Ground = require(script.Checks.Ground)
 local Drivability = require(script.Checks.Drivability)
+local Routes = require(script.Checks.Routes)
 
 local BuildGuard = {}
 
@@ -37,7 +39,18 @@ BuildGuard.Layers = Layers
 BuildGuard.TestScene = TestScene
 
 local SEVERITY_ORDER = { error = 1, warning = 2 }
-local CHECK_ORDER = { config = 0, buried = 1, offground = 2, zfight = 3, ledge = 4, slope = 5 }
+local CHECK_ORDER = {
+	config = 0,
+	buried = 1,
+	offground = 2,
+	zfight = 3,
+	ledge = 4,
+	slope = 5,
+	grade = 6,
+	width = 7,
+	offgrid = 8,
+	cave = 9,
+}
 
 local function defaultWorld()
 	if game then
@@ -107,6 +120,7 @@ function BuildGuard.scan(root, options)
 	add(Ground.scan(ctx, flagged))
 	add(ZFight.scan(ctx))
 	add(Drivability.scan(ctx))
+	add(Routes.scan(ctx))
 	-- Invalid BuildGuard_ attributes found while resolving (they're ignored,
 	-- and the part falls back to its parent's settings).
 	local badConfig = {}
@@ -150,7 +164,8 @@ function BuildGuard.scan(root, options)
 end
 
 -- Builds one plan fixing every fixable issue in `report` (or just `issues`).
--- Returns plan, unfixedIssues. Ledge/slope issues are lint and never fixed.
+-- Returns plan, unfixedIssues. Ledge, slope and route issues are lint and
+-- never fixed.
 function BuildGuard.planFixes(report, issues)
 	issues = issues or report.issues
 	local plan = Plan.new()

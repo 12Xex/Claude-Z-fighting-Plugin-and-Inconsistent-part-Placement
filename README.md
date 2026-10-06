@@ -7,9 +7,10 @@ A Roblox Studio plugin (and a library you can call from the command bar or MCP `
 | **Z-fight scan** | Finds pairs of parts with faces pointing the same way, within `zFightTolerance` (0.01 studs) of each other, that overlap | Preview, then apply a nudge (undoable) |
 | **Layer offsets** | `Layers.place(item, surface, { layer = n })` puts markings, signs and trim on a face, lifted `n × layerLift` | Prevents z-fighting in the first place |
 | **Buried-part check** | Samples every road/rail/track top surface every 2 studs and flags any spot under terrain or another part | Snap onto the ground if the cover is terrain or ground; otherwise flagged for a person to decide |
-| **Snap to ground** | Raycasts down under roads/rails/tracks and puts them `groundLift` above the surface | Preview, then apply (undoable) |
+| **Snap to ground** | Raycasts down under roads/rails/tracks and puts them `groundLift` (rails: `railLift`) above the surface | Preview, then apply (undoable) |
 | **Drivability lint** | Flags ledges above `maxLedge` and slope changes above `maxSlopeChange` between connected road parts | Report only |
-| **Test scene + self-test** | Builds a messy scene with 10 planted problems and proves each one is found, then fixed (or still flagged, for lint and manual cases) | — |
+| **Route limits** | Flags roads/rails/tracks steeper than `maxRouteSlope`, roads narrower than `minRoadWidth` or with edges off the `gridSize` grid, and cave entrances wider than `caveEntranceWidth` | Report only |
+| **Test scene + self-test** | Builds a messy scene with 14 planted problems and proves each one is found, then fixed (or still flagged, for lint and manual cases) | — |
 
 ## Install
 
@@ -70,6 +71,7 @@ print(BG.selfTest().text)                  -- planted-problem self-test
 ## How parts are classified
 
 - **Road / Rail / Track:** the `BuildGuardKind` attribute (`"Road"`, `"Rail"`, `"Track"` or `"None"`), then a CollectionService tag with the same name, then the part's name (`road`, `street`, `highway`; `rail` but not `railing`/`guardrail`/`handrail`; `track`). Each road's driving surface is its **Top (+Y) face**.
+- **Cave entrance:** a marker part filling the opening, named `CaveEntrance…` or with `BuildGuardCaveEntrance = true`. Its `Size.X` is the opening's width.
 - **Ground:** Terrain, parts named `Baseplate`/`Ground`/`Terrain`, parts with `BuildGuardGround = true`, or anything at least 512×512 studs.
 - **Layered items:** anything placed with `Layers.place` (it sets `BuildGuardLayer`). These never count as covering a road, and they move with the road when it's snapped.
 - **Never moved by fixes:** ground parts, `Locked` parts, and parts with `BuildGuardLocked = true`.
@@ -78,7 +80,7 @@ print(BG.selfTest().text)                  -- planted-problem self-test
 ## How the fixes decide
 
 - **Z-fighting:** the smaller part of the pair moves (a layered item over a plain one; never a locked or ground part). It is nudged out along the shared face normal until the faces are `zFightNudge` apart. If it fights on both opposite sides of one axis, a nudge clears both but sinks one side into the other part. That's fine when the sunk side is hidden anyway (a marking's underside on a road), so it still nudges. When both sides are visible (a window exactly as thick as its wall), it grows by the nudge on both sides instead.
-- **Snap:** samples the part's underside every 2 studs and raycasts down, starting 20 studs above the part so a sunk part still finds the surface over it. It moves the part up or down so its lowest point sits `groundLift` above the highest ground hit. Ground means terrain or a part that starts *below* the snapped part's bottom, so markings, crates or rails sitting on it don't count.
+- **Snap:** samples the part's underside every 2 studs and raycasts down, starting 20 studs above the part so a sunk part still finds the surface over it. It moves the part up or down so its lowest point sits `groundLift` (0.1; rails `railLift`, 0.2) above the highest ground hit. Ground means terrain or a part that starts *below* the snapped part's bottom, so markings, crates or rails sitting on it don't count.
 - **Buried:** a point is buried when something occupies the space `buriedProbeHeight` (0.25) above the surface, so markings lying on the road don't trigger it, or when something within `buriedClearance` (3 studs) overhead covers it. Bridges and gantries higher than that are fine.
 
 ## Values
@@ -89,12 +91,17 @@ Defaults are in `src/BuildGuard/Config.lua`. Any model, folder or part can overr
 |---|---|---|
 | `zFightTolerance` | 0.01 | Same-facing faces this close together z-fight |
 | `zFightNudge` | 0.02 | Gap a z-fight fix leaves (must be > tolerance) |
-| `layerLift` | 0.02 | Lift per layer |
-| `groundLift` | 0.05 | Gap between a snapped road/rail and the ground |
+| `layerLift` | 0.05 | Lift per layer |
+| `groundLift` | 0.1 | Gap between a snapped road/track and the ground |
+| `railLift` | 0.2 | Gap between a snapped rail and its road bed or the ground |
 | `groundTolerance` | 0.1 | Off-ground check fires beyond this |
 | `flatTiltDegrees` | 5 | Steeper parts are ramps (not snapped) |
-| `maxLedge` | **0.5 (provisional)** | Drivability: max step between connected roads |
-| `maxSlopeChange` | **15° (provisional)** | Drivability: max angle between connected roads |
+| `maxLedge` | 1 | Drivability: max step between connected roads |
+| `maxSlopeChange` | 20° | Drivability: max angle between connected roads |
+| `maxRouteSlope` | 20° | Steepest road/rail/track surface |
+| `minRoadWidth` | 16 | Narrowest road (one truck plus passing room) |
+| `gridSize` | 4 | Grid for level road edges |
+| `caveEntranceWidth` | 6 | Widest cave entrance (minecarts and players fit, trucks don't) |
 
 ## Tests
 

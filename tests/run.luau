@@ -5,6 +5,7 @@ local FakeWorld = require("./FakeWorld")
 
 local Instance, Vector3, CFrame = roblox.Instance, roblox.Vector3, roblox.CFrame
 local BG = Harness.load()
+local D = BG.Config.defaults
 
 local passed, failed = 0, 0
 local function test(name, fn)
@@ -156,7 +157,7 @@ test("layer n sits n * layerLift above the face, on any face", function()
 	local road = part("Road", Vector3.new(20, 1, 10), CFrame.new(0, 0.55, 0))
 	local mark = part("Mark", Vector3.new(4, 0.1, 0.5), CFrame.new())
 	BG.Layers.place(mark, road, { layer = 2, u = 3 })
-	near(mark.CFrame.Position.Y - mark.Size.Y / 2, 1.05 + 0.04, 1e-4, "bottom height")
+	near(mark.CFrame.Position.Y - mark.Size.Y / 2, 1.05 + 2 * D.layerLift, 1e-4, "bottom height")
 	near(mark.CFrame.Position.X, 3, 1e-4, "u offset")
 	expect(mark:GetAttribute("BuildGuardLayer") == 2)
 
@@ -166,7 +167,7 @@ test("layer n sits n * layerLift above the face, on any face", function()
 	local normal = -wall.CFrame.LookVector
 	near(sign.CFrame.UpVector:Dot(normal), -1, 1e-4, "sign faces out of the wall front")
 	local out = (sign.CFrame.Position - wall.CFrame.Position):Dot(-normal)
-	near(out, 0.5 + 0.02 + 0.1, 1e-4, "distance off the wall")
+	near(out, 0.5 + D.layerLift + 0.1, 1e-4, "distance off the wall")
 	near(sign.CFrame.Position.Y, 7, 1e-4, "v offset is up the wall")
 end)
 
@@ -189,7 +190,7 @@ test("keepPosition: item stays where it was across the face, keeps its heading",
 	local lp = road.CFrame:PointToObjectSpace(mark.CFrame.Position)
 	near(lp.X, 4, 1e-3, "u kept")
 	near(lp.Z, -2, 1e-3, "v kept")
-	near(lp.Y, 0.5 + 0.02 + 0.05, 1e-3, "lifted onto layer 1")
+	near(lp.Y, 0.5 + D.layerLift + 0.05, 1e-3, "lifted onto layer 1")
 	near(mark.CFrame.RightVector:Dot(start.RightVector), 1, 1e-3, "heading kept")
 end)
 
@@ -202,9 +203,11 @@ print("Buried / snap to ground")
 
 test("scan accepts a list of roots and de-duplicates", function()
 	local root, world, part = setup()
-	part("Wall", Vector3.new(10, 10, 1), CFrame.new(0, 5, 0))
-	part("Sign", Vector3.new(2, 2, 0.4), CFrame.new(0, 5, -0.3))
-	local report = BG.scan({ root.Wall, root.Sign, root.Sign }, { world = world })
+	-- Hold the references: Lune hands out a new userdata on every instance
+	-- lookup (root.Sign ~= root.Sign as table keys), Roblox doesn't.
+	local wall = part("Wall", Vector3.new(10, 10, 1), CFrame.new(0, 5, 0))
+	local sign = part("Sign", Vector3.new(2, 2, 0.4), CFrame.new(0, 5, -0.3))
+	local report = BG.scan({ wall, sign, sign }, { world = world })
 	expect(report.partCount == 2 and #checks(report, "zfight") == 1)
 end)
 
@@ -229,9 +232,10 @@ end)
 
 test("rails on a track bed: neither is buried or off the ground", function()
 	local root, world, part = setup()
-	part("TrackBed", Vector3.new(24, 0.5, 4), CFrame.new(0, 0.3, 0))
+	local bedTop = D.groundLift + 0.5
+	part("TrackBed", Vector3.new(24, 0.5, 4), CFrame.new(0, bedTop - 0.25, 0))
 	for _, z in { -0.7, 0, 0.7 } do
-		part("Rail", Vector3.new(23, 0.3, 0.3), CFrame.new(0, 0.75, z))
+		part("Rail", Vector3.new(23, 0.3, 0.3), CFrame.new(0, bedTop + D.railLift + 0.15, z))
 	end
 	local report = BG.scan(root, { world = world })
 	expect(#checks(report, "buried") == 0, BG.format(report))
@@ -246,8 +250,8 @@ test("snap: hovering road comes down, its markings ride along, ramps are skipped
 	local plan, skipped = BG.planSnap({ road, ramp }, { world = world })
 	expect(#skipped == 1 and skipped[1].part == ramp, "ramp skipped")
 	BG.apply(plan)
-	near(road.CFrame.Position.Y - 0.5, 0.05, 1e-4, "road bottom at groundLift")
-	near(mark.CFrame.Position.Y - mark.Size.Y / 2, 1.05 + 0.02, 1e-4, "marking moved with the road")
+	near(road.CFrame.Position.Y - 0.5, D.groundLift, 1e-4, "road bottom at groundLift")
+	near(mark.CFrame.Position.Y - mark.Size.Y / 2, 1 + D.groundLift + D.layerLift, 1e-4, "marking moved with the road")
 end)
 
 test("snap onto terrain", function()
@@ -255,12 +259,13 @@ test("snap onto terrain", function()
 	world.fillTerrain(CFrame.new(0, 2, 0), Vector3.new(40, 4, 40)) -- surface at y = 4
 	local road = part("Road_T", Vector3.new(10, 1, 10), CFrame.new(0, 9, 0))
 	BG.apply((BG.planSnap({ road }, { world = world })))
-	near(road.CFrame.Position.Y - 0.5, 4.05, 1e-4)
+	near(road.CFrame.Position.Y - 0.5, 4 + D.groundLift, 1e-4)
 end)
 
 test("road sunk slightly (within groundTolerance) is not flagged", function()
 	local root, world, part = setup()
-	part("Road_OK", Vector3.new(20, 1, 10), CFrame.new(0, 0.5, 0)) -- resting with no lift
+	-- Half the lift short: within tolerance. 16 wide and on the grid, so no lint either.
+	part("Road_OK", Vector3.new(16, 1, 16), CFrame.new(0, 0.5 + D.groundLift / 2, 0))
 	expect(#BG.scan(root, { world = world }).issues == 0)
 end)
 
@@ -291,9 +296,9 @@ local function ledgeScene(step)
 end
 
 test("ledge above maxLedge flagged, at or below it not", function()
-	local root, world = ledgeScene(0.6)
+	local root, world = ledgeScene(D.maxLedge * 1.2)
 	expect(#checks(BG.scan(root, { world = world }), "ledge") == 1)
-	root, world = ledgeScene(0.4)
+	root, world = ledgeScene(D.maxLedge * 0.8)
 	expect(#checks(BG.scan(root, { world = world }), "ledge") == 0)
 	expect(#checks(BG.scan(root, { world = world, config = { maxLedge = 0.3 } }), "ledge") == 1, "config respected")
 end)
@@ -314,13 +319,74 @@ test("slope change measured between connected roads, not absolute tilt", functio
 	end
 	ramp("Road_R1", 10, 10)
 	local slope = checks(BG.scan(root, { world = world }), "slope")
-	expect(#slope == 0, "10° change is under the 15° limit")
+	expect(#slope == 0, "10° change is under the limit")
 	-- A second ramp continuing at 20° from the end of the first: 10° change.
 	local r1 = root.Road_R1
 	local topEnd = r1.CFrame:PointToWorldSpace(Vector3.new(8, 0.5, 0))
 	part("Road_R2", Vector3.new(16, 1, 10), CFrame.new(topEnd) * CFrame.Angles(0, 0, math.rad(20)) * CFrame.new(8, -0.5, 0))
 	expect(#checks(BG.scan(root, { world = world }), "slope") == 0, "10° + 10° is fine pairwise")
 	expect(#checks(BG.scan(root, { world = world, config = { maxSlopeChange = 8 } }), "slope") == 2, "both joins over 8°")
+end)
+
+print("Route limits")
+
+test("rails snap railLift above the ground, roads groundLift", function()
+	local _, world, part = setup()
+	local road = part("Road_1", Vector3.new(16, 1, 16), CFrame.new(0, 5, 0))
+	local rail = part("Rail_1", Vector3.new(20, 0.5, 1), CFrame.new(30, 5, 0))
+	BG.apply((BG.planSnap({ road, rail }, { world = world })))
+	near(road.CFrame.Position.Y - 0.5, D.groundLift, 1e-4, "road")
+	near(rail.CFrame.Position.Y - 0.25, D.railLift, 1e-4, "rail")
+end)
+
+test("grade: routes steeper than maxRouteSlope are flagged, at the limit not", function()
+	local root, world, part = setup()
+	local function ramp(name, degrees, z)
+		return part(name, Vector3.new(16, 1, 16), CFrame.new(0, 1 + D.groundLift, z) * CFrame.Angles(0, 0, math.rad(degrees)) * CFrame.new(8, -0.5, 0))
+	end
+	ramp("Road_AtLimit", D.maxRouteSlope, 0)
+	ramp("Road_Steep", D.maxRouteSlope + 5, 40)
+	part("Rail_Steep", Vector3.new(20, 0.5, 1), CFrame.new(0, 5, 80) * CFrame.Angles(0, 0, math.rad(D.maxRouteSlope + 5)))
+	local grade = checks(BG.scan(root, { world = world }), "grade")
+	expect(#grade == 2, "expected 2, got " .. #grade)
+	for _, issue in grade do
+		expect(issue.parts[1] ~= root.Road_AtLimit, "at the limit is fine")
+	end
+	expect(#checks(BG.scan(root, { world = world, config = { maxRouteSlope = 30 } }), "grade") == 0, "config respected")
+end)
+
+test("width: roads narrower than minRoadWidth are flagged; rails never", function()
+	local root, world, part = setup()
+	part("Road_Wide", Vector3.new(16, 1, 64), CFrame.new(0, 0.5 + D.groundLift, 0))
+	part("Road_Narrow", Vector3.new(64, 1, 12), CFrame.new(0, 0.5 + D.groundLift, 48))
+	part("Rail_1", Vector3.new(20, 0.5, 1), CFrame.new(0, 0.25 + D.railLift, -48))
+	local width = checks(BG.scan(root, { world = world }), "width")
+	expect(#width == 1 and width[1].parts[1] == root.Road_Narrow, "only Road_Narrow")
+	expect(#checks(BG.scan(root, { world = world, config = { minRoadWidth = 12 } }), "width") == 0, "config respected")
+end)
+
+test("offgrid: level square-on road edges must sit on the grid; turned roads skipped", function()
+	local root, world, part = setup()
+	local y = 0.5 + D.groundLift
+	part("Road_On", Vector3.new(32, 1, 16), CFrame.new(0, y, 0))
+	part("Road_Turned90", Vector3.new(32, 1, 16), CFrame.new(40, y, 0) * CFrame.Angles(0, math.rad(90), 0))
+	part("Road_Off", Vector3.new(16, 1, 16), CFrame.new(1, y, 40))
+	part("Road_Diagonal", Vector3.new(16, 1, 16), CFrame.new(41, y, 40) * CFrame.Angles(0, math.rad(45), 0))
+	local off = checks(BG.scan(root, { world = world }), "offgrid")
+	expect(#off == 1 and off[1].parts[1] == root.Road_Off, "only Road_Off")
+	expect(string.find(off[1].message, "nearest grid x -8..8", 1, true), off[1].message)
+	expect(#checks(BG.scan(root, { world = world, config = { gridSize = 0 } }), "offgrid") == 0, "gridSize 0 turns it off")
+end)
+
+test("cave: entrance markers wider than caveEntranceWidth are flagged", function()
+	local root, world, part = setup()
+	part("CaveEntrance_Mine", Vector3.new(D.caveEntranceWidth, 8, 2), CFrame.new(0, 4, 0))
+	part("Cave Entrance Wide", Vector3.new(D.caveEntranceWidth + 2, 8, 2), CFrame.new(20, 4, 0))
+	local tunnel = part("Tunnel", Vector3.new(D.caveEntranceWidth + 2, 8, 2), CFrame.new(40, 4, 0))
+	local cave = checks(BG.scan(root, { world = world }), "cave")
+	expect(#cave == 1 and cave[1].parts[1].Name == "Cave Entrance Wide", "name match, spaces ignored")
+	tunnel:SetAttribute("BuildGuardCaveEntrance", true)
+	expect(#checks(BG.scan(root, { world = world }), "cave") == 2, "attribute marks it too")
 end)
 
 print("Config")
@@ -372,12 +438,14 @@ test("z-fighting combines to the stricter tolerance across a model boundary", fu
 	expect(#report.overrides == 1 and string.find(report.overrides[1].text, "no reason given", 1, true))
 end)
 
-test("per-part groundLift is used by snapping", function()
+test("per-part groundLift and railLift are used by snapping", function()
 	local root, world, part = setup()
-	local m = model(root, "Rails", { BuildGuard_groundLift = 0.2 })
-	local rail = part("Rail_1", Vector3.new(20, 0.5, 1), CFrame.new(0, 5, 0), m)
-	BG.apply((BG.planSnap({ rail }, { world = world })))
-	near(rail.CFrame.Position.Y - 0.25, 0.2, 1e-4)
+	local m = model(root, "Yard", { BuildGuard_groundLift = 0.3, BuildGuard_railLift = 0.4 })
+	local road = part("Road_1", Vector3.new(16, 1, 16), CFrame.new(0, 5, 0), m)
+	local rail = part("Rail_1", Vector3.new(20, 0.5, 1), CFrame.new(30, 5, 0), m)
+	BG.apply((BG.planSnap({ road, rail }, { world = world })))
+	near(road.CFrame.Position.Y - 0.5, 0.3, 1e-4, "road uses groundLift")
+	near(rail.CFrame.Position.Y - 0.25, 0.4, 1e-4, "rail uses railLift")
 end)
 
 test("Layers follows BuildGuard_layerLift on the surface", function()

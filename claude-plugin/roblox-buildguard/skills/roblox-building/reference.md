@@ -33,6 +33,10 @@
 | `offground` | warning | A flat road/rail/track hovers or is sunk more than 0.1 studs | Snap to ground |
 | `ledge` | warning | Step between connected roads over `maxLedge` | Manual |
 | `slope` | warning | Angle between connected roads over `maxSlopeChange` | Manual |
+| `grade` | warning | A road/rail/track surface steeper than `maxRouteSlope` | Manual |
+| `width` | warning | A road's top face is narrower than `minRoadWidth` (its shorter side is its width) | Manual |
+| `offgrid` | warning | A level road, square to the world axes, has edges off the `gridSize` grid. The message gives the nearest grid edges. Turned or tilted roads are skipped. | Manual |
+| `cave` | warning | A cave entrance marker's `Size.X` is over `caveEntranceWidth` | Manual |
 
 ## Settings you can override per model
 
@@ -44,16 +48,21 @@ Set with `BG.setConfig`, stored as `BuildGuard_<key>` attributes. "Pair" is how 
 | `zFightNudge` | 0.02 | 0.002–0.5 | max | Gap a fix leaves; must be > tolerance |
 | `zFightMinOverlapArea` | 0.01 | 0–10 | stricter (min) | Smaller overlaps are edge contacts |
 | `zFightIgnoreTransparency` | 0.99 | 0–1 | — | Parts at or above this are skipped |
-| `layerLift` | 0.02 | 0.002–0.5 | — | Lift per layer (read from the surface) |
-| `groundLift` | 0.05 | 0–2 | — | Gap between a snapped road/rail and the ground |
+| `layerLift` | 0.05 | 0.002–0.5 | — | Lift per layer (read from the surface) |
+| `groundLift` | 0.1 | 0–2 | — | Gap between a snapped road/track and the ground |
+| `railLift` | 0.2 | 0–2 | — | Gap between a snapped rail and its road bed or the ground |
 | `groundTolerance` | 0.1 | 0.01–10 | — | Off-ground check fires beyond this |
 | `flatTiltDegrees` | 5 | 0–45 | — | Steeper parts count as ramps |
 | `snapSearchUp` / `snapSearchDown` | 20 / 500 | | — | How far snapping looks above/below |
 | `buriedProbeHeight` | 0.25 | 0.01–10 | — | Cover must rise this far above the surface |
 | `buriedClearance` | 3 | 0.1–100 | — | How far overhead counts as covering |
 | `sampleSpacing` | 2 | 0.25–50 | — | Sample grid spacing for buried/snap |
-| `maxLedge` | 0.5 (provisional) | 0–50 | looser (max) | Step between connected roads |
-| `maxSlopeChange` | 15 (provisional) | 0–90 | looser (max) | Angle between connected roads |
+| `maxLedge` | 1 | 0–50 | looser (max) | Step between connected roads |
+| `maxSlopeChange` | 20 | 0–90 | looser (max) | Angle between connected roads |
+| `maxRouteSlope` | 20 | 0–90 | — | Steepest road/rail/track surface, in degrees |
+| `minRoadWidth` | 16 | 0–1000 | — | Narrowest road top face |
+| `gridSize` | 4 | 0–1000 | — | Grid for level road edges (0 turns the check off) |
+| `caveEntranceWidth` | 6 | 0–1000 | — | Widest cave entrance |
 | `connectMargin` | 0.1 | 0–5 | max | Horizontal gap still counted as connected |
 | `connectMaxStep` | 4 | 0.1–100 | max | Bigger vertical gaps are overpasses |
 
@@ -63,6 +72,7 @@ Set with `BG.setConfig`, stored as `BuildGuard_<key>` attributes. "Pair" is how 
 |---|---|
 | `BuildGuardKind` = `"Road"` / `"Rail"` / `"Track"` / `"None"` | Sets or clears the kind (overrides the name) |
 | `BuildGuardGround = true` | Counts as ground (like Baseplate/Terrain) |
+| `BuildGuardCaveEntrance = true` / `false` | Marks (or unmarks) a cave entrance marker. Names containing `CaveEntrance` (spaces and underscores ignored) are markers too. |
 | `BuildGuardLocked = true` | Fixes never move it (also true for `Locked` parts and ground) |
 | `BuildGuardIgnore = true` | It and its descendants are skipped |
 | `BuildGuardLayer` | Set by `Layers.place`. Marks layered items. |
