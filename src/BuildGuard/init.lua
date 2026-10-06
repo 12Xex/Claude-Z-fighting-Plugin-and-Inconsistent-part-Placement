@@ -37,8 +37,17 @@ BuildGuard.Layers = Layers
 BuildGuard.TestScene = TestScene
 
 local SEVERITY_ORDER = { error = 1, warning = 2 }
-local CHECK_ORDER =
-	{ config = 0, buried = 1, offground = 2, zfight = 3, ledge = 4, slope = 5, routeslope = 6, roadwidth = 7 }
+local CHECK_ORDER = {
+	config = 0,
+	buried = 1,
+	offground = 2,
+	zfight = 3,
+	headroom = 4,
+	ledge = 5,
+	slope = 6,
+	routeslope = 7,
+	roadwidth = 8,
+}
 
 local function defaultWorld()
 	if game then
@@ -103,7 +112,9 @@ function BuildGuard.scan(root, options)
 	local buried = Buried.scan(ctx)
 	local flagged = {}
 	for _, issue in buried do
-		flagged[issue.parts[1]] = true
+		if issue.check == "buried" then
+			flagged[issue.parts[1]] = true
+		end
 	end
 	add(buried)
 	add(Ground.scan(ctx, flagged))

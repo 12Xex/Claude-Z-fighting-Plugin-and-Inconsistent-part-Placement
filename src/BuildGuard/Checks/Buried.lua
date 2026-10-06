@@ -10,6 +10,10 @@
 	Other roads/rails/tracks and layered items never count as cover: rails sit
 	on track beds, and markings lie on roads.
 
+	Headroom (separate, warning): when the part isn't buried and its kind's
+	headroom setting is above 0, rays go straight up from the same points and
+	anything closer than that (a tunnel roof, a bridge) is reported.
+
 	Fix: when everything covering the part is ground (terrain, baseplate...),
 	the fix is a snap onto that ground's surface. When it's an ordinary part
 	(a crate, a building) there's no safe automatic answer, so it's only flagged.
@@ -95,10 +99,57 @@ function Buried.scan(ctx)
 					issue.message ..= " — move the cover or the " .. string.lower(kind) .. " by hand"
 				end
 				table.insert(issues, issue)
+			else
+				local issue = Buried.headroom(s, kind, samples, config, ignore, ctx)
+				if issue then
+					table.insert(issues, issue)
+				end
 			end
 		end
 	end
 	return issues
+end
+
+local HEADROOM_KEY = { Road = "roadHeadroom", Rail = "railHeadroom", Track = "trackHeadroom" }
+
+-- Headroom: the clear height above a road/rail/track (tunnel roofs, bridges,
+-- overhangs) must be at least its kind's headroom setting (0 = off).
+function Buried.headroom(s, kind, samples, config, ignore, ctx)
+	local need = config[HEADROOM_KEY[kind]]
+	if not need or need <= 0 then
+		return nil
+	end
+	local up = s.axes[2]
+	local lowest, ceiling = math.huge, nil
+	for _, point in samples do
+		local probe = point + up * config.buriedProbeHeight
+		local hit = ctx.world.raycast(probe, up * (need - config.buriedProbeHeight), ignore)
+		if hit then
+			local clear = (hit.position - point):Dot(up)
+			if clear < lowest then
+				lowest, ceiling = clear, hit.instance
+			end
+		end
+	end
+	if not ceiling then
+		return nil
+	end
+	local _, sources = ctx.configFor(s.part)
+	local key = HEADROOM_KEY[kind]
+	return {
+		check = "headroom",
+		severity = "warning",
+		parts = { s.part },
+		value = lowest,
+		message = ("%s %s has %.1f studs of headroom under %s (needs %.1f%s)"):format(
+			kind,
+			s.part.Name,
+			lowest,
+			ceiling.Name,
+			need,
+			if sources[key] then ", set on " .. sources[key].Name else ""
+		),
+	}
 end
 
 return Buried

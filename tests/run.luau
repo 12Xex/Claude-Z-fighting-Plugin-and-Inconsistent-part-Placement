@@ -260,6 +260,17 @@ test("snap onto terrain", function()
 	near(road.CFrame.Position.Y - 0.5, 4 + D.roadLift, 1e-4)
 end)
 
+test("a road buried deeper than snapSearchUp is skipped, not dragged to the surface", function()
+	local root, world, part = setup()
+	world.fillTerrain(CFrame.new(0, 20, 0), Vector3.new(40, 40, 40)) -- mountain, surface at y = 40
+	local road = part("Road_Deep", Vector3.new(20, 1, 16), CFrame.new(0, 5, 0))
+	local plan, skipped = BG.planSnap({ road }, { world = world })
+	expect(#plan.items == 0 and #skipped == 1, "skipped")
+	expect(string.find(skipped[1].reason, "buried deeper", 1, true), skipped[1].reason)
+	local buried = checks(BG.scan(root, { world = world }), "buried")
+	expect(#buried == 1 and buried[1].fixItems == nil, "flagged, no automatic fix")
+end)
+
 test("road sunk slightly (within groundTolerance) is not flagged", function()
 	local root, world, part = setup()
 	part("Road_OK", Vector3.new(20, 1, D.minRoadWidth), CFrame.new(0, 0.5, 0)) -- resting with no lift

@@ -6,7 +6,8 @@
 	      ignore(instance) -> true to skip a hit and keep going
 	  partAt(point, ignore?) -> BasePart | nil      (solid shapes only)
 	  partsInBox(cframe, size) -> { BasePart }
-	  isInsideTerrain(point) -> boolean
+	  isInsideTerrain(point) -> boolean   (strict: deep inside, for the buried check)
+	  isSolidTerrain(point) -> boolean    (loose: voxel at least half full)
 	  isTerrain(instance) -> boolean
 	  hasTag(instance, tag) -> boolean
 	  fillTerrain(cframe, size, materialName) / clearTerrain(cframe, size)
@@ -81,6 +82,12 @@ function StudioWorld.new(worldRoot)
 
 	function self.isInsideTerrain(point)
 		return occupancyAt(point) >= 0.99 and occupancyAt(point + Vector3.new(0, 4, 0)) > 0
+	end
+
+	-- Looser test used while searching for open air: the point's voxel is
+	-- at least half full.
+	function self.isSolidTerrain(point)
+		return occupancyAt(point) >= 0.5
 	end
 
 	function self.isTerrain(instance)

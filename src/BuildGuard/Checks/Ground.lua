@@ -1,9 +1,13 @@
 --[[
 	Snap to ground, and the "off the ground" check built on it.
 
-	Snapping a road/rail/track raycasts straight down from a grid of points across
-	its bottom, starting above the part (so a sunk part still finds the surface over
-	it), and moves the part vertically so its lowest point sits its kind's
+	Snapping a road/rail/track raycasts straight down along a grid of columns
+	across its bottom. Each column starts just above the part's own top. If
+	that point is open air (the surface, or inside a tunnel or cave), the ray
+	starts there, so a tunnel road finds the tunnel floor and never the
+	mountain above it. If the point is inside ground (the part is sunk or
+	buried), it steps up a stud at a time, up to `snapSearchUp`, to the first
+	open air and casts down from there. It then moves the part vertically so its lowest point sits its kind's
 	lift (roadLift / railLift / trackLift, else groundLift) above the highest
 	ground hit. "Ground" is terrain, or a part that starts
 	below the snapped part's bottom (see `ignoreFor`).
@@ -72,6 +76,25 @@ end
 
 local LIFT_KEY = { Road = "roadLift", Rail = "railLift", Track = "trackLift" }
 
+local function insideGround(point, ctx, ignore)
+	return ctx.world.isSolidTerrain(point) or ctx.world.partAt(point, ignore) ~= nil
+end
+
+-- Open air at or above `start`, searching up to `maxUp` studs; nil if none.
+local function openAirAbove(start, ctx, ignore, maxUp)
+	if not insideGround(start, ctx, ignore) then
+		return start
+	end
+	for h = 1, math.floor(maxUp) do
+		local q = start + Vector3.new(0, h, 0)
+		if not insideGround(q, ctx, ignore) then
+			-- One more stud of margin: terrain is only known per 4-stud voxel.
+			return q + Vector3.new(0, 1, 0)
+		end
+	end
+	return nil
+end
+
 -- Works out how far `s` must move vertically to sit on the ground.
 -- Returns { delta = number } or { skip = reason }.
 function Ground.measure(s, ctx)
@@ -82,17 +105,25 @@ function Ground.measure(s, ctx)
 	end
 	local ignore = Ground.ignoreFor(s, ctx)
 	local lift = config[LIFT_KEY[ctx.kindOf(s.part)] or "groundLift"]
-	local startY = s.max.Y + config.snapSearchUp
-	local best, hits = -math.huge, 0
+	local topY = s.max.Y + 0.05
+	local best, hits, buried = -math.huge, 0, 0
 	for _, p in Geometry.faceSamples(s, "Bottom", 0.05, 0.25, config.sampleSpacing) do
-		local length = startY - p.Y + config.snapSearchDown
-		local hit = ctx.world.raycast(Vector3.new(p.X, startY, p.Z), Vector3.new(0, -length, 0), ignore)
+		local start = openAirAbove(Vector3.new(p.X, topY, p.Z), ctx, ignore, config.snapSearchUp)
+		local hit
+		if start then
+			hit = ctx.world.raycast(start, Vector3.new(0, -(start.Y - p.Y + config.snapSearchDown), 0), ignore)
+		else
+			buried += 1
+		end
 		if hit then
 			hits += 1
 			best = math.max(best, hit.position.Y + lift - p.Y)
 		end
 	end
 	if hits == 0 then
+		if buried > 0 then
+			return { skip = ("buried deeper than %d studs; carve it out or move it"):format(config.snapSearchUp) }
+		end
 		return { skip = "no ground below" }
 	end
 	return { delta = best }

@@ -84,6 +84,8 @@ function FakeWorld.new(root, Geometry)
 		return false
 	end
 
+	self.isSolidTerrain = self.isInsideTerrain
+
 	function self.isTerrain(instance)
 		return instance == terrain
 	end

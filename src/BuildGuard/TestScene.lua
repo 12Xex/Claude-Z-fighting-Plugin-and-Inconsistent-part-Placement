@@ -19,6 +19,11 @@
 	  P10 Road_C_Steep       slope      flag  road joined to another at more than maxSlopeChange
 	  P11 Road_C_Steep       routeslope flag  the same road tilts more than maxRouteSlope
 	  P12 Road_Narrow        roadwidth  flag  road narrower than minRoadWidth
+	  P13 Road_Tunnel        offground  fix   road hovering in a mine tunnel whose rock roof is
+	                                          thinner than snapSearchUp; must land on the tunnel
+	                                          floor, not the roof (final height is checked)
+	  P14 Road_Tunnel        headroom   flag  tunnel roof lower than the MineTunnel model's
+	                                          roadHeadroom
 
 	Every size and height comes from the config (road width, lifts, limits),
 	so the scene plants real violations and real non-violations whatever
@@ -148,6 +153,29 @@ function TestScene.build(parent, world, config, origin)
 		control(part("Rail_OnBed", Vector3.new(23, 0.3, 0.3), CFrame.new(-40, bedTop + config.railLift + 0.15, 105 + z), Color3.fromRGB(110, 110, 120), Enum.Material.Metal))
 	end
 
+	-- Mine tunnel: terrain walls and an 8-stud rock roof (thinner than
+	-- snapSearchUp) over a 24-wide, 12-high tunnel. A road hovers inside it;
+	-- a rail inside is built correctly.
+	local tunnelBlocks = {
+		{ cframe = base * CFrame.new(102, 16, 0), size = Vector3.new(28, 8, 48) }, -- roof, y 12..20
+		{ cframe = base * CFrame.new(102, 6, -18), size = Vector3.new(28, 12, 12) }, -- wall, z -24..-12
+		{ cframe = base * CFrame.new(102, 6, 18), size = Vector3.new(28, 12, 12) }, -- wall, z 12..24
+	}
+	for _, block in tunnelBlocks do
+		world.fillTerrain(block.cframe, block.size, "Rock")
+	end
+	local mine = Instance.new("Model")
+	mine.Name = "MineTunnel"
+	mine:SetAttribute("BuildGuard_roadHeadroom", 14)
+	mine:SetAttribute("BuildGuardConfigReason", "haul truck is 13 studs tall")
+	mine.Parent = folder
+	local tunnelRoad = road("Road_Tunnel", Vector3.new(20, 1, W), CFrame.new(102, 1.1, -2))
+	tunnelRoad.Parent = mine
+	plant(tunnelRoad, "P13", "offground", "fix", "hovering 0.5 in a tunnel under a thin roof")
+	planted[#planted].expectBottomY = origin.Y + config.roadLift
+	table.insert(planted, { id = "P14", part = tunnelRoad, check = "headroom", expect = "flag", note = "roof 12 up, needs 14" })
+	control(part("Rail_Tunnel", Vector3.new(20, 0.5, 1), CFrame.new(102, railY, 9), Color3.fromRGB(110, 110, 120), Enum.Material.Metal)).Parent = mine
+
 	-- Per-model override: MountainPass allows its own steep road.
 	local pass = Instance.new("Model")
 	pass.Name = "MountainPass"
@@ -159,7 +187,11 @@ function TestScene.build(parent, world, config, origin)
 	control(road("Road_M2_Steep", Vector3.new(16, 1, W), CFrame.new(-50, roadTop, -110) * CFrame.Angles(0, 0, math.rad(steep)) * CFrame.new(8, -0.5, 0))).Parent = pass
 
 	folder.Parent = parent
-	return { folder = folder, planted = planted, controls = controls, terrain = { hill }, overrideModel = pass }
+	local terrain = { hill }
+	for _, block in tunnelBlocks do
+		table.insert(terrain, block)
+	end
+	return { folder = folder, planted = planted, controls = controls, terrain = terrain, overrideModel = pass }
 end
 
 function TestScene.destroy(scene, world)

@@ -110,6 +110,19 @@ function SelfTest.run(BuildGuard, options)
 		local still = reported(after, p.check, p.part)
 		if p.expect == "fix" then
 			row(not still, ("%-4s fixed    %-9s %s"):format(p.id, p.check, p.part.Name))
+			if p.expectBottomY then
+				local bottom = p.part.CFrame.Position.Y - p.part.Size.Y / 2
+				row(
+					math.abs(bottom - p.expectBottomY) < 0.02,
+					("%-4s landed   %-9s %s at %.2f (expected %.2f)"):format(
+						p.id,
+						p.check,
+						p.part.Name,
+						bottom,
+						p.expectBottomY
+					)
+				)
+			end
 		else
 			row(still, ("%-4s flagged  %-9s %s (lint/manual, stays reported)"):format(p.id, p.check, p.part.Name))
 		end

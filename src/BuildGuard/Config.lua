@@ -55,8 +55,8 @@ Config.defaults = {
 	-- A road or rail is "off the ground" when its snap would move it more than
 	-- this far, up or down.
 	groundTolerance = 0.1,
-	-- Snapping looks for ground starting this far above the part's top surface
-	-- (so a part sunk into the ground still finds the surface above it)...
+	-- A buried part looks this far up for open air (the surface it should sit
+	-- on). Parts in open air never look up, so tunnels are safe...
 	snapSearchUp = 20,
 	-- ...and down to this far below the part.
 	snapSearchDown = 500,
@@ -68,6 +68,11 @@ Config.defaults = {
 	buriedProbeHeight = 0.25,
 	-- How far above the surface we look for something covering it.
 	buriedClearance = 3,
+	-- Minimum clear height above each kind's surface (tunnel roofs, bridges).
+	-- 0 turns the check off. Set from your vehicle: BG.checkVehicle suggests it.
+	roadHeadroom = 0,
+	railHeadroom = 0,
+	trackHeadroom = 0,
 	-- Spacing (studs) of the sample grid across a part's surface for the
 	-- buried check and snapping.
 	sampleSpacing = 2,
@@ -119,6 +124,9 @@ Config.schema = {
 	buriedProbeHeight = { min = 0.01, max = 10 },
 	buriedClearance = { min = 0.1, max = 100 },
 	sampleSpacing = { min = 0.25, max = 50 },
+	roadHeadroom = { min = 0, max = 500 },
+	railHeadroom = { min = 0, max = 500 },
+	trackHeadroom = { min = 0, max = 500 },
 	maxLedge = { min = 0, max = 50 },
 	maxSlopeChange = { min = 0, max = 90 },
 	maxRouteSlope = { min = 0, max = 90 },
