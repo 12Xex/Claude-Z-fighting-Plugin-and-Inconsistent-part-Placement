@@ -1,0 +1,12 @@
+{
+  "name": "BuildGuard",
+  "tree": {
+    "$className": "Folder",
+    "BuildGuardPlugin": {
+      "$path": "src/Plugin"
+    },
+    "BuildGuard": {
+      "$path": "src/BuildGuard"
+    }
+  }
+}
