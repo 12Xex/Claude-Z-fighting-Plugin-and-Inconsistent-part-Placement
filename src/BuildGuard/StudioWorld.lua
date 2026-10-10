@@ -216,7 +216,7 @@ local function download(content)
 	if not ok then
 		local reason, keep = failureReason(em)
 		if reason == REASON.failed then
-			warn(("BuildGuard: couldn't load mesh %s (%s); it is checked by its box only"):format(
+			warn(("BuildGuard: couldn't load mesh %s (%s); it is checked by its box only, not for z-fighting"):format(
 				tostring(content.Uri),
 				tostring(em)
 			))

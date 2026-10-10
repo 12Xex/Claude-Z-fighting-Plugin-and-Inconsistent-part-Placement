@@ -741,6 +741,10 @@ test("long reports page; withUndo returns what the function returns", function()
 	local p2 = BG.page(text, 2, 120)
 	expect(string.find(p2, "line 121", 1, true) and not string.find(p2, "line 120\n", 1, true), p2)
 	expect(string.find(p2, "page 2 of 3", 1, true), p2)
+	-- The last page says so, and doesn't ask for itself again.
+	local p3 = BG.page(text, 3, 120)
+	expect(string.find(p3, "(page 3 of 3, the last page)", 1, true) and not string.find(p3, "ask for", 1, true), p3)
+	expect(BG.page(text, 4, 120) == p3, "pages past the end give the last page")
 	expect(BG.page("short", 1) == "short")
 	local a, b = BG.withUndo("x", function()
 		return 1, 2

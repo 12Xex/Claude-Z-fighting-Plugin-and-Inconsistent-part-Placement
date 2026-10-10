@@ -51,7 +51,8 @@ Config.defaults = {
 	-- Meshes ---------------------------------------------------------------------
 	-- Read MeshPart triangles through EditableMesh (meshes the place's owner
 	-- can load), so z-fighting is checked on the real surface. Other meshes
-	-- and unions are only checked by box, and the report says how many.
+	-- and unions are only checked by box (duplicates and overlapping boxes,
+	-- not z-fighting), and the report says how many.
 	meshTriangles = true,
 	-- Meshes with more triangles than this are checked by box only.
 	meshTriangleLimit = 20000,
@@ -128,7 +129,8 @@ Config.defaults = {
 		{ kind = "Road", words = { "road", "roads", "roadway", "street", "highway" } },
 	},
 	-- ...and it is flat: no thicker (local Y) than this fraction of its
-	-- longest side, so "RoadSign" panels and "StreetLamp" poles don't count.
+	-- longest side, so "StreetLamp" poles don't count (Classify.lua has the
+	-- other rules: no standing panels, top near level, not layered...).
 	kindMaxThickness = 0.5,
 	-- Kinds the drivability lint applies to (pairs are only compared within a kind).
 	drivableKinds = { "Road", "Rail" },

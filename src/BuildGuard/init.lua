@@ -27,6 +27,7 @@ local TestScene = require(script.TestScene)
 local FarView = require(script.FarView)
 local Vehicle = require(script.Vehicle)
 local ZFight = require(script.Checks.ZFight)
+local Meshes = require(script.Checks.Meshes)
 local Buried = require(script.Checks.Buried)
 local Ground = require(script.Checks.Ground)
 local Drivability = require(script.Checks.Drivability)
@@ -464,21 +465,12 @@ function BuildGuard.format(report)
 			if report.seconds then (" in %.2fs"):format(report.seconds) else ""
 		),
 	}
-	local coverage = report.coverage
-	if coverage and (coverage.meshTriangles or 0) + (coverage.meshBoxOnly or 0) > 0 then
-		local reasons = {}
-		for reason, count in coverage.reasons or {} do
-			table.insert(reasons, ("%s: %d"):format(reason, count))
-		end
-		table.sort(reasons)
-		table.insert(
-			lines,
-			("  Meshes: %d checked by their triangles, %d by their box only%s"):format(
-				coverage.meshTriangles or 0,
-				coverage.meshBoxOnly or 0,
-				if #reasons > 0 then " (" .. table.concat(reasons, "; ") .. ")" else ""
-			)
-		)
+	local meshLine = Meshes.describeCoverage(report.coverage)
+	if meshLine then
+		table.insert(lines, "  " .. meshLine)
+	end
+	for _, note in Meshes.describeNotes(report.coverage) do
+		table.insert(lines, "  [NOTE] " .. note)
 	end
 	if #report.overrides > 0 then
 		table.insert(lines, "  Config overrides in effect:")
@@ -831,7 +823,8 @@ function BuildGuard.startCheck(root, options)
 end
 
 -- One page of a long text: lines (page - 1) * size + 1 .. page * size, with
--- a "page n of m" line when there's more than one page.
+-- a "page n of m" line when there's more than one page (the last one says
+-- it's the last page).
 function BuildGuard.page(text, page, size)
 	size = size or 120
 	local lines = string.split(text, "\n")
@@ -844,7 +837,11 @@ function BuildGuard.page(text, page, size)
 	for i = (page - 1) * size + 1, math.min(page * size, #lines) do
 		table.insert(out, lines[i])
 	end
-	table.insert(out, ("(page %d of %d; ask for page = %d for more)"):format(page, pages, math.min(page + 1, pages)))
+	if page < pages then
+		table.insert(out, ("(page %d of %d; ask for page = %d for more)"):format(page, pages, page + 1))
+	else
+		table.insert(out, ("(page %d of %d, the last page)"):format(page, pages))
+	end
 	return table.concat(out, "\n")
 end
 

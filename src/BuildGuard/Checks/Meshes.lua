@@ -7,8 +7,10 @@
 	    a face, so the z-fight check tests the real surface. Meshes it can't
 	    read, meshes over meshTriangleLimit triangles, unions (no readable
 	    geometry) and parts drawn by a SpecialMesh/BlockMesh/CylinderMesh
-	    child are only checked by box; `coverage` counts them and says why,
-	    and keeps the world's notes on a mesh (coverage.notes, by path).
+	    child are only checked by box: for duplicates and overlapping boxes,
+	    not for z-fighting (a mesh's box isn't its surface). `coverage`
+	    counts them and says why, and keeps the world's notes on a mesh
+	    (coverage.notes, by path).
 	  * Duplicates: two visible parts of the same class, mesh (or shape),
 	    position, rotation and size. The classic double import. Any class.
 	  * Box overlap: two meshes or unions whose boxes line up and share most
@@ -53,7 +55,8 @@ end
 
 -- One line for the report, or nil when no mesh needed checking:
 --     "Meshes: 4 checked by their triangles, 3 by box only (unions have no
---      readable geometry: 2; mesh not loadable: 1)"
+--      readable geometry: 2; mesh not loadable: 1) — box-only meshes aren't
+--      checked for z-fighting, ..."
 function Meshes.describeCoverage(coverage)
 	if not coverage or coverage.meshTriangles + coverage.meshBoxOnly == 0 then
 		return nil
@@ -69,6 +72,9 @@ function Meshes.describeCoverage(coverage)
 	table.sort(reasons)
 	if #reasons > 0 then
 		text ..= " (" .. table.concat(reasons, "; ") .. ")"
+	end
+	if coverage.meshBoxOnly > 0 then
+		text ..= " — box-only meshes aren't checked for z-fighting, only for duplicates and overlapping boxes: check them by eye"
 	end
 	return text
 end

@@ -51,7 +51,7 @@
 	numbers are set. Roads are thin enough that the step from the ground up
 	onto them (thickness + roadLift) stays under maxLedge, and the ramps and
 	the raised road have guardrails or a wider plinth beside them, so the
-	edge check only finds P16.
+	edge check only finds P16 and P31.
 
 	The MountainPass model carries BuildGuard_maxSlopeChange and
 	BuildGuard_maxRouteSlope attributes, so its steep road is allowed: a

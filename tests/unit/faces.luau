@@ -482,6 +482,10 @@ test("coverage counts meshes checked by triangles and by box only, with reasons"
 	expect(coverage.reasons["more than meshTriangleLimit (12) triangles"] == 1)
 	local line = Meshes.describeCoverage(coverage)
 	expect(string.find(line, "1 checked by their triangles, 3 by box only", 1, true), line)
+	-- Box-only meshes get no z-fight check at all, and the line says so.
+	expect(string.find(line, "aren't checked for z-fighting", 1, true), line)
+	local report = BG.scan(root, { world = world, config = { meshTriangleLimit = 12 } })
+	expect(string.find(BG.format(report), "  " .. Meshes.describeCoverage(report.coverage), 1, true), BG.format(report))
 
 	ctx = BG.newContext(root, { world = world, config = { meshTriangles = false } })
 	ZFight.scan(ctx)
@@ -572,6 +576,8 @@ test("a mesh's note (data not centred on its bounds) is kept in the coverage wit
 	expect(report.coverage.notes["Workspace/Rock"] == note, "note kept")
 	local lines = Meshes.describeNotes(report.coverage)
 	expect(#lines == 1 and lines[1] == "Workspace/Rock: " .. note, lines[1])
+	-- The report shows it, so it can be passed on.
+	expect(string.find(BG.format(report), "  [NOTE] Workspace/Rock: " .. note, 1, true), BG.format(report))
 end)
 
 T.section("Messages")

@@ -315,7 +315,8 @@ local function slowestSteps(timings, count)
 	return table.concat(parts, ", ")
 end
 
--- Every step's time, and why meshes were checked by box only, in Output.
+-- Every step's time, why meshes were checked by box only (so not for
+-- z-fighting), and notes on meshes, in Output.
 local function printScanDetails(report)
 	if report.timings then
 		local parts = {}
@@ -332,11 +333,19 @@ local function printScanDetails(report)
 		end
 		table.sort(reasons)
 		print(
-			("BuildGuard: %d mesh(es) checked by their box only%s"):format(
+			("BuildGuard: %d mesh(es) checked by their box only, so not for z-fighting (only duplicates and overlapping boxes)%s"):format(
 				coverage.meshBoxOnly,
 				if #reasons > 0 then ": " .. table.concat(reasons, "; ") else ""
 			)
 		)
+	end
+	local notes = {}
+	for path, note in (coverage and coverage.notes) or {} do
+		table.insert(notes, ("BuildGuard note: %s: %s"):format(path, note))
+	end
+	table.sort(notes)
+	for _, line in notes do
+		print(line)
 	end
 end
 
@@ -352,7 +361,7 @@ local function scanSummary(report, seconds)
 	end
 	local boxOnly = if report.coverage then report.coverage.meshBoxOnly or 0 else 0
 	if boxOnly > 0 then
-		text ..= (" %d mesh(es) checked by box only (reasons in Output)."):format(boxOnly)
+		text ..= (" %d mesh(es) checked by box only, not for z-fighting (reasons in Output)."):format(boxOnly)
 	end
 	return text .. " Click a row to select its parts and look at the problem."
 end
