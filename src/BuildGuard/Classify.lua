@@ -238,6 +238,11 @@ function Classify.spinningParts(constraints)
 			local f1 = Classify.attachmentFrame(a1)
 			if f0 and f1 then
 				local axis = f0.RightVector
+				if c:IsA("CylindricalConstraint") then
+					-- It slides along Attachment0's X and turns about an axis
+					-- InclinationAngle from X towards Y.
+					axis = (f0 * CFrame.Angles(0, 0, math.rad(Util.prop(c, "InclinationAngle", 0)))).RightVector
+				end
 				local p0 = if spinsOnAxis(a0.Parent, f0.Position, axis) then a0.Parent else nil
 				local p1 = if spinsOnAxis(a1.Parent, f1.Position, axis) then a1.Parent else nil
 				if p0 and p1 then

@@ -279,6 +279,31 @@ test("joints: assemblies, mechanisms, spinning wheels and the vehicle", function
 	expect(#BG.Classify.wheels(m) == 4)
 end)
 
+test("a wheel on a CylindricalConstraint turns about its inclined axis", function()
+	local root = setup()
+	local chassis = Instance.new("Part")
+	chassis.Size, chassis.CFrame, chassis.Parent = Vector3.new(6, 1, 10), CFrame.new(0, 3, 0), root
+	local wheel = Instance.new("Part")
+	wheel.Shape = Enum.PartType.Cylinder
+	wheel.Size, wheel.CFrame, wheel.Parent = Vector3.new(1, 2, 2), CFrame.new(3.5, 1, 0), root
+	-- Slides up and down (Attachment0's X is world up); turns about the axle
+	-- (90° from X towards Y, which is world -X).
+	local up = CFrame.new(3.5, 1, 0) * CFrame.Angles(0, 0, math.pi / 2)
+	local a0 = Instance.new("Attachment")
+	a0.CFrame = chassis.CFrame:ToObjectSpace(up)
+	a0.Parent = chassis
+	local a1 = Instance.new("Attachment")
+	a1.CFrame = wheel.CFrame:ToObjectSpace(up)
+	a1.Parent = wheel
+	local c = Instance.new("CylindricalConstraint")
+	c.Attachment0, c.Attachment1 = a0, a1
+	c.InclinationAngle = 90
+	c.Parent = chassis
+	expect(BG.Classify.spinningParts({ c })[wheel], "turns about the axle")
+	c.InclinationAngle = 0
+	expect(not BG.Classify.spinningParts({ c })[wheel], "turns about the slider (up): not a wheel")
+end)
+
 test("parts in a vehicle are never roads or rails by name", function()
 	local root, world = setup()
 	local _, _, rail = cart(root)
