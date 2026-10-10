@@ -5,8 +5,11 @@ local fs = require("@lune/fs")
 local process = require("@lune/process")
 local T = require("./lib")
 
-if process.args[1] and process.args[1] ~= "--" and process.args[1] ~= "" then
-	T.filter = string.lower(process.args[1])
+for _, arg in process.args do
+	if arg ~= "--" and arg ~= "" then
+		T.filter = string.lower(arg)
+		break
+	end
 end
 
 local files = {}
