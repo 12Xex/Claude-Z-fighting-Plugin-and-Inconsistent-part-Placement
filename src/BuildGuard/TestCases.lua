@@ -65,9 +65,11 @@ function TestCases.faces(b, origin)
 	b.part("Globe_Outer", Vector3.new(2, 2, 2), o * CFrame.new(46, 3, 0), Color3.fromRGB(250, 240, 200), nil, nil, "Ball")
 	b.plant(b.part("Globe_Inner", Vector3.new(2, 2, 2), o * CFrame.new(46, 3, 0), Color3.fromRGB(250, 200, 120), nil, nil, "Ball"), "P21", "zfight", "fix", "same centre and size")
 
-	-- P22: a corner wedge whose Right face is flush with a block's.
+	-- P22: a corner wedge sunk halfway into a block at its front-right
+	-- corner, so its Right and Front faces lie on the block's (1.5 studs²
+	-- each).
 	b.part("Roof_Block", Vector3.new(4, 2, 4), o * CFrame.new(56, 1, 0), Color3.fromRGB(150, 90, 70))
-	b.plant(b.part("Roof_Corner", Vector3.new(2, 2, 2), o * CFrame.new(57, 3, -1), Color3.fromRGB(150, 90, 70), nil, "CornerWedgePart"), "P22", "zfight", "fix", "corner wedge side flush")
+	b.plant(b.part("Roof_Corner", Vector3.new(2, 2, 2), o * CFrame.new(57, 2, -1), Color3.fromRGB(150, 90, 70), nil, "CornerWedgePart"), "P22", "zfight", "fix", "corner wedge sides flush")
 	-- Control: a corner wedge resting on a block (back-to-back faces only).
 	b.part("Roof_Block2", Vector3.new(4, 2, 4), o * CFrame.new(56, 1, 8), Color3.fromRGB(150, 90, 70))
 	b.control(b.part("Roof_Corner2", Vector3.new(2, 2, 2), o * CFrame.new(56, 3, 8), Color3.fromRGB(150, 90, 70), nil, "CornerWedgePart"))
@@ -120,6 +122,7 @@ end
 -- limited sliders (suspension). Front faces -Z. Returns the model.
 function TestCases.vehicle(b, origin)
 	local o = origin
+	local wo = b.base * o -- world frame of the zone, for attachments
 	local truck = b.model("Desperado_Test")
 	local function p(name, size, cf, color, options)
 		options = options or {}
@@ -163,12 +166,12 @@ function TestCases.vehicle(b, origin)
 		-- Spin: hinge along the axle (world X) through the wheel centre.
 		local spin = Instance.new("HingeConstraint")
 		spin.Name = "Spin_" .. name
-		spin.Attachment0 = attach(knuckle, "SpinKnuckle", o * centre)
-		spin.Attachment1 = attach(wheel, "SpinWheel", o * centre)
+		spin.Attachment0 = attach(knuckle, "SpinKnuckle", wo * centre)
+		spin.Attachment1 = attach(wheel, "SpinWheel", wo * centre)
 		spin.ActuatorType = Enum.ActuatorType.Motor
 		spin.Parent = wheel
 		-- Joint to the chassis, axis straight up through the wheel centre.
-		local up = o * centre * CFrame.Angles(0, 0, math.pi / 2)
+		local up = wo * centre * CFrame.Angles(0, 0, math.pi / 2)
 		local joint
 		if z < 0 then
 			joint = Instance.new("HingeConstraint")
@@ -192,8 +195,9 @@ function TestCases.vehicle(b, origin)
 	end
 
 	-- Control: a mudflap overlapping the rear-left wheel, allowed by a
-	-- NoCollisionConstraint.
-	local flap = p("Mudflap_RL", Vector3.new(0.2, 1.2, 1), CFrame.new(-4.6, 1.2, 8.2), DARK)
+	-- NoCollisionConstraint. Its bottom is level with the hull box's, so the
+	-- ground clearance stays 1.0.
+	local flap = p("Mudflap_RL", Vector3.new(0.2, 1.2, 1), CFrame.new(-4.6, 1.6, 8.2), DARK)
 	weld(chassis, flap)
 	local allow = Instance.new("NoCollisionConstraint")
 	allow.Part0 = flap
@@ -219,7 +223,7 @@ function TestCases.names(b, road)
 	-- Flat and long like a rail, but its first word is "roof".
 	stand("RoofRail", Vector3.new(8, 0.3, 0.3), 10)
 	local crate = b.part("IgnoredCrate", Vector3.new(3, 3, 3), CFrame.new(), Color3.fromRGB(160, 120, 70))
-	crate.CFrame = cf * CFrame.new(half.X - 4, half.Y + 1.5, 0)
+	crate.CFrame = cf * CFrame.new(-half.X + 4, half.Y + 1.5, 0) -- clear of the stop line
 	crate:AddTag("BuildGuardIgnore")
 end
 
