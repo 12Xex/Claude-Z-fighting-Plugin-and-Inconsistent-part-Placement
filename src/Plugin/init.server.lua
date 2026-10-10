@@ -239,7 +239,7 @@ local function showReport(report)
 		for _, part in issue.parts do
 			outline(part, color)
 		end
-		local fixable = issue.fixItems ~= nil or issue.check == "zfight"
+		local fixable = BuildGuard.isFixable(issue)
 		listRow(
 			("[%s] %s%s"):format(issue.check, issue.message, if fixable then "" else " (manual)"),
 			color,

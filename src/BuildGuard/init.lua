@@ -46,14 +46,20 @@ BuildGuard.TestScene = TestScene
 local SEVERITY_ORDER = { error = 1, warning = 2 }
 local CHECK_ORDER = {
 	config = 0,
-	buried = 1,
-	offground = 2,
-	zfight = 3,
-	headroom = 4,
-	ledge = 5,
-	slope = 6,
-	routeslope = 7,
-	roadwidth = 8,
+	duplicate = 1,
+	buried = 2,
+	collision = 3,
+	offground = 4,
+	zfight = 5,
+	zgap = 6,
+	meshoverlap = 7,
+	wheelsweep = 8,
+	headroom = 9,
+	ledge = 10,
+	edge = 11,
+	slope = 12,
+	routeslope = 13,
+	roadwidth = 14,
 }
 
 local function defaultWorld()
@@ -210,7 +216,7 @@ function BuildGuard.scan(root, options)
 			return SEVERITY_ORDER[a.severity] < SEVERITY_ORDER[b.severity]
 		end
 		if a.check ~= b.check then
-			return CHECK_ORDER[a.check] < CHECK_ORDER[b.check]
+			return (CHECK_ORDER[a.check] or 99) < (CHECK_ORDER[b.check] or 99)
 		end
 		return a.message < b.message
 	end)
@@ -230,6 +236,11 @@ function BuildGuard.scan(root, options)
 	}
 end
 
+-- Is this issue fixed automatically (by its own fix items or a planner)?
+function BuildGuard.isFixable(issue)
+	return issue.fixItems ~= nil or issue.planner ~= nil
+end
+
 -- Builds one plan fixing every fixable issue in `report` (or just `issues`).
 -- Returns plan, unfixedIssues. Ledge/slope issues are lint and never fixed.
 function BuildGuard.planFixes(report, issues)
@@ -241,7 +252,7 @@ function BuildGuard.planFixes(report, issues)
 			for _, item in issue.fixItems do
 				Plan.add(plan, item)
 			end
-		elseif issue.check == "zfight" then
+		elseif issue.planner == "zfight" then
 			table.insert(zfights, issue)
 		else
 			table.insert(unfixed, issue)
@@ -352,7 +363,7 @@ function BuildGuard.format(report)
 		end
 	end
 	for _, issue in report.issues do
-		local fixable = issue.fixItems ~= nil or issue.check == "zfight"
+		local fixable = BuildGuard.isFixable(issue)
 		table.insert(
 			lines,
 			("  [%s] %-9s %s%s"):format(

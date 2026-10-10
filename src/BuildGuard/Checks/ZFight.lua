@@ -73,6 +73,7 @@ function ZFight.scan(ctx)
 					table.insert(issues, {
 						check = "zfight",
 						severity = "error",
+						planner = "zfight",
 						parts = { a.part, b.part },
 						solids = { a, b },
 						contacts = contacts,

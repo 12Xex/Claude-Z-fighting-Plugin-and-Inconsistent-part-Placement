@@ -41,9 +41,7 @@ function Util.words(name)
 		else
 			local boundary = false
 			if previous then
-				if (class == "digit") ~= (previous == "digit") then
-					boundary = true
-				elseif class == "upper" and previous == "lower" then
+				if (class == "digit") ~= (previous == "digit") or (class == "upper" and previous == "lower") then
 					boundary = true
 				elseif class == "upper" and previous == "upper" then
 					-- "HTTPServer": the last capital of a run starts the next word.
