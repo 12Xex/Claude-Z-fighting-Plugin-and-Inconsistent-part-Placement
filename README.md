@@ -1,17 +1,21 @@
 # BuildGuard
 
-A Roblox Studio plugin (and a library you can call from the command bar or MCP `run_code`) that catches the problems AI-generated builds keep having:
+A Roblox Studio plugin (and a library you can call from the command bar or an MCP server's `execute_luau` / `run_code`) that catches the problems AI-generated builds keep having:
 
 | Tool | What it does | Fix |
 |---|---|---|
-| **Z-fight scan** | Finds pairs of parts with faces pointing the same way, within `zFightTolerance` (0.01 studs) of each other, that overlap | Preview, then apply a nudge (undoable) |
+| **Z-fight scan** | Finds pairs of parts with faces pointing the same way, within `zFightTolerance` (0.01 studs) of each other, that overlap. Covers blocks, wedges, corner wedges, the round sides of cylinders and balls, and the triangles of meshes the place can load. | Preview, then apply a nudge (undoable) |
+| **Meshes** | Duplicates (same mesh, position and size: a double import) and meshes whose boxes nearly coincide. Meshes that can't be loaded and unions are checked by box, and the report says how many. | Report only |
+| **Far view** | `zFightViewDistance` on a map-sized model makes its faces keep the gap that still holds at that distance on a phone's 24-bit depth buffer (0.107 at 300 studs); the **Far-view test** rig shows which gaps flicker on a real device | Nudge to that gap |
 | **Layer offsets** | `Layers.place(item, surface, { layer = n })` puts markings, signs and trim on a face, lifted `n × layerLift` | Prevents z-fighting in the first place |
 | **Buried-part check** | Samples every road/rail/track top surface every 2 studs and flags any spot under terrain or another part | Snap onto the ground if the cover is terrain or ground; otherwise flagged for a person to decide |
 | **Snap to ground** | Raycasts down under roads/rails/tracks and puts them their kind's lift above the surface (roads 0.1, rails 0.2) | Preview, then apply (undoable) |
-| **Drivability lint** | For roads and rails: ledges above `maxLedge` and slope changes above `maxSlopeChange` between connected pieces, any piece steeper than `maxRouteSlope`, and roads narrower than `minRoadWidth` | Report only |
+| **Drivability lint** | For roads and rails: ledges above `maxLedge` and slope changes above `maxSlopeChange` between connected pieces, the step from the ground beside a road onto its edge, any piece steeper than `maxRouteSlope`, and roads narrower than `minRoadWidth` | Report only |
 | **Headroom** | Flags tunnel roofs, bridges and overhangs lower than a kind's headroom setting (`roadHeadroom` etc.; off until set) | Report only |
-| **Vehicle profile** | `BG.checkVehicle(truck)` measures a vehicle (size, wheel radius, clearance, approach/departure/breakover angles) and checks the road limits against it | Report only |
-| **Test scene + self-test** | Builds a messy scene with 15 planted problems and proves each one is found, then fixed (or still flagged, for lint and manual cases) | — |
+| **Vehicle check** | Colliding parts of a vehicle that overlap at rest (invisible collision boxes included, unless a NoCollisionConstraint allows it), and wheels that hit something anywhere in their suspension travel and steering lock (read from the constraint limits) | Report only |
+| **Vehicle profile** | `BG.checkVehicle(truck)` measures a vehicle from its colliding parts (wheels, clearance, approach/departure/breakover angles) and its visible parts (width with mirrors, height) and checks the road limits against it. Drive-tested limits can be recorded so they stop asking. | Report only |
+| **Fix report** | `BG.formatChanges(result)` lists every part a fix changed, by path, with its exact move and the line to put in the script that builds it | — |
+| **Test scene + self-test** | Builds a messy scene with planted problems for every check and proves each one is found, then fixed (or still flagged, for lint and manual cases), with control parts that must never be flagged | — |
 
 ## Install
 
@@ -60,6 +64,10 @@ local BG = require(game.ServerStorage.BuildGuard)
 print(BG.check(workspace.Town))            -- report + fix preview, changes nothing
 local result = BG.fixAll(workspace.Town)   -- scan → plan → apply, repeated until clean
 print(BG.format(result.report))            -- what's left (lint and manual items)
+print(BG.formatChanges(result))            -- each changed part and its exact nudge
+
+local id = BG.startCheck(workspace.Map)    -- a big map in the background...
+print(BG.jobStatus(id))                    -- ...poll until it gives the report
 
 BG.apply(BG.planSnap(workspace.Town.Roads)) -- snap every road/rail/track in a model
 BG.Layers.place(marking, road, { layer = 1, u = -10 })
@@ -70,13 +78,17 @@ print(BG.selfTest().text)                  -- planted-problem self-test
 
 `BG.scan(root, { config = { maxLedge = 0.3 } })` overrides any value for one call. `BG.snapToGrid(cframe)` rounds X and Z to the 4-stud grid (height and rotation untouched).
 
+Messages name parts by their path from the scanned model, with `#n` on the nth of several siblings with the same name (`Map/Tub/TubTop#3`), and say where to look (`at (x, y, z)`); `BG.find(root, path)` returns the part. Scans pause between checks when they can, so Studio stays responsive, and the report ends with the time each check took.
+
 ## How parts are classified
 
-- **Road / Rail / Track:** the `BuildGuardKind` attribute (`"Road"`, `"Rail"`, `"Track"` or `"None"`), then a CollectionService tag with the same name, then the part's name (`road`, `street`, `highway`; `rail` but not `railing`/`guardrail`/`handrail`; `track`). Each road's driving surface is its **Top (+Y) face**.
-- **Ground:** Terrain, parts named `Baseplate`/`Ground`/`Terrain`, parts with `BuildGuardGround = true`, or anything at least 512×512 studs.
+- **Road / Rail / Track:** the `BuildGuardKind` attribute (`"Road"`, `"Rail"`, `"Track"` or `"None"`), then a CollectionService tag with the same name, then the part's name: its **first word** must be road/street/highway, rail/railroad/railway or track/trackbed (words split at capitals, digits and punctuation), and the part must be flat and not round. So `Road_01` and `TrackBed` count, but `BedRail`, `RoofRail`, `Railing`, `RoadSign` and `StreetLamp` don't, and nothing inside a vehicle counts by name. `classifyByName = false` uses tags and attributes only. Each road's driving surface is its **Top (+Y) face**.
+- **Ground:** Terrain, the `BuildGuardGround` tag or attribute, or a flat part whose first word is `Baseplate`/`Ground`/`Terrain`. Size alone doesn't make a part ground (a big floor slab or roof isn't).
+- **Wheels:** the `BuildGuardWheel` tag or attribute; else parts that spin on a hinge or cylindrical constraint through their centre; else names whose first word is wheel/tire/tyre followed only by position words (`Wheel_FL`). A steering wheel, spare wheel or wheel arch is never a wheel.
+- **Vehicles:** everything joined to a VehicleSeat or to two or more spinning wheels, and every part of a model holding a VehicleSeat or marked `BuildGuardVehicle`.
 - **Layered items:** anything placed with `Layers.place` (it sets `BuildGuardLayer`). These never count as covering a road, and they move with the road when it's snapped.
 - **Never moved by fixes:** ground parts, `Locked` parts, and parts with `BuildGuardLocked = true`.
-- **Skipped entirely:** anything under an instance with `BuildGuardIgnore = true`.
+- **Skipped entirely:** anything at or under an instance with the `BuildGuardIgnore` attribute or tag. It also never counts as cover, ground or a ceiling.
 
 ## How the fixes decide
 
@@ -84,6 +96,8 @@ print(BG.selfTest().text)                  -- planted-problem self-test
 - **Snap:** samples the part's underside every 2 studs. Each column starts just above the part's own top. If that's open air (the surface, or inside a tunnel), it casts straight down, so tunnel roads land on the tunnel floor, not the mountain above. If the part is buried, it steps up a stud at a time (up to 20) to the first open air and casts down from there. Deeper than that, it's skipped and reported. It moves the part up or down so its lowest point sits its kind's lift (`roadLift`, `railLift`, `trackLift`, else `groundLift`) above the highest ground hit. Ground means terrain or a part that starts *below* the snapped part's bottom, so markings, crates or rails sitting on it don't count.
 - **Buried:** a point is buried when something occupies the space `buriedProbeHeight` (0.25) above the surface, so markings lying on the road don't trigger it, or when something within `buriedClearance` (3 studs) overhead covers it. Bridges and gantries higher than that are fine.
 
+- **Round parts:** two same-size cylinders on one axis (a rod in a sleeve) or two same-size balls on one centre: the smaller part's radius grows by the nudge.
+- **Vehicles:** colliding parts in different assemblies (not welded together, not joined by a hinge or ball socket, and without a NoCollisionConstraint) mustn't overlap. Wheels are swept through every combination of their suspension travel and steering lock from the constraint limits (`steerLock` covers steering that a script drives), and anything they hit is reported with the angle and travel.
 - **Moving jointed parts:** after a fix moves a part, any Weld or Motor6D holding it is updated (`C1`) to hold it in its new place. WeldConstraints are toggled off and on so they record the new offset. Revert restores them. Without this, a nudged truck strut would snap back when the game runs. (The WeldConstraint behaviour is untested in Studio.)
 
 ## Values
@@ -97,7 +111,7 @@ Project numbers (approved for the mining game):
 | `maxLedge` | 1.0 | Largest step between connected road (or rail) pieces; truck-tested |
 | `maxRouteSlope` | 20° | Steepest any road or rail piece may tilt; a loaded truck must climb it |
 | `maxSlopeChange` | 20° | Largest angle between connected pieces (catches crests and dips) |
-| `minRoadWidth` | 16 | One truck plus passing room, measured across the driving direction |
+| `minRoadWidth` | 22 | The approved haul road, measured across the driving direction (two trucks pass: 2 × width with mirrors + 2) |
 | `gridSize` | 4 | Horizontal layout grid (`BG.snapToGrid`); matches terrain voxels |
 | `railLift` | 0.2 | Rails above their road/track bed |
 | `roadLift` | 0.1 | Roads above the ground |
@@ -113,13 +127,16 @@ Engine values:
 | `groundTolerance` | 0.1 | Off-ground check fires beyond this |
 | `flatTiltDegrees` | 5 | Steeper parts are ramps (not snapped) |
 
+Set project-wide numbers once with `BG.setProjectConfig`, for example the truck's headroom: `BG.setProjectConfig({ roadHeadroom = 10.6 }, "Desperado is 9.6 tall")`. They're attributes on `workspace` and also apply to models outside it.
+
 ## Tests
 
 The library runs outside Studio under [Lune](https://github.com/lune-org/lune) with a fake world (box raycasts, box terrain):
 
 ```sh
-lune run tests/run       # unit tests + self-test with three different configs
+lune run tests/run       # unit tests (tests/unit/*.luau) + self-test with three different configs
+lune run tests/run -- vehicle   # only tests whose name contains "vehicle"
 lune run tests/report    # prints the test scene's report before and after fixAll
 ```
 
-The Studio-only parts (the plugin UI, `StudioWorld`'s raycasts and terrain voxel reads, ChangeHistoryService undo) can't run there. Check them in Studio with **Run self-test**.
+The Studio-only parts (the plugin UI, `StudioWorld`'s raycasts, terrain voxel reads, EditableMesh loading and collision groups, ChangeHistoryService undo) can't run there. Check them in Studio with **Run self-test**.

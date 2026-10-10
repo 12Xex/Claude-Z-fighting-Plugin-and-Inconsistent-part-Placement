@@ -1,11 +1,13 @@
 ---
 name: roblox-building
-description: Rules for building or editing parts in a Roblox place through a Roblox Studio MCP server (run_code or similar). Use whenever creating, moving or detailing parts, models, meshes, roads, rails, vehicles, signs, markings or trim in Studio. Covers z-fighting (flat faces, round parts, meshes), layering details on surfaces, snapping roads/rails to the ground, road edges and drivability, vehicle collisions and wheel clearance, setting per-model BuildGuard config, and checking the build before finishing.
+description: Rules for building or editing parts in a Roblox place through a Roblox Studio MCP server (execute_luau, run_code or similar). Use whenever creating, moving or detailing parts, models, meshes, roads, rails, vehicles, signs, markings or trim in Studio. Covers z-fighting (flat faces, round parts, meshes), layering details on surfaces, snapping roads/rails to the ground, road edges and drivability, vehicle collisions and wheel clearance, setting per-model BuildGuard config, and checking the build before finishing.
 ---
 
 # Building in Roblox Studio with BuildGuard
 
-You change the place by sending Luau to Studio through the Roblox Studio MCP tool that runs code (for example `run_code`). BuildGuard is a library inside the place that prevents and catches the classic build bugs.
+You change the place by sending Luau to Studio through the Roblox Studio MCP tool that runs code: `execute_luau` on Studio's built-in MCP server, or `run_code` on the older Roblox MCP server. BuildGuard is a library inside the place that prevents and catches the classic build bugs.
+
+**Getting text back:** end each snippet by returning one string, for example `return BG.check(model)`. Returned values come back through both servers; `print` output may only reach Studio's Output window (read it with `get_console_output` if you need it), and only the first returned value survives.
 
 ## 0. Make sure BuildGuard is there and current
 
@@ -13,7 +15,7 @@ Run this first in every session:
 
 ```lua
 local m = game.ServerStorage:FindFirstChild("BuildGuard")
-print(if m then "BuildGuard " .. tostring(require(m).VERSION) else "BuildGuard missing")
+return if m then "BuildGuard " .. tostring(require(m).VERSION) else "BuildGuard missing"
 ```
 
 - **Missing:** stop and ask the user to install the BuildGuard Studio plugin and press **Install library** in its panel. Don't build without it.
@@ -45,7 +47,7 @@ For the step-by-step order to build each kind of thing (session start, landscape
   - no road or rail piece tilted more than **20°**;
   - at most a **1-stud step** and a **20° angle change** where two pieces join, and at most a 1-stud step from the ground onto a road edge.
 
-  Check the limits for a model with `print(BG.explainConfig(workspace.YourBuild))`. To climb more than 20°, build switchbacks; don't make a steeper ramp.
+  Check the limits for a model with `return BG.explainConfig(workspace.YourBuild)`. To climb more than 20°, build switchbacks; don't make a steeper ramp.
 - **Ground:** Terrain is ground. A big part that is ground (a floor slab under the map) must be tagged `BuildGuardGround`; size alone doesn't make it ground.
 - **Tunnels and caves:** build the tunnel floor first, then snap roads and rails onto it. Snapping finds the tunnel floor, not the mountain above. A road or rail buried deeper than 20 studs isn't moved; carve its tunnel instead. Headroom comes from the place-wide `roadHeadroom` (set from the truck), or from the tunnel's model: `BG.setConfig(mine, { roadHeadroom = 14 }, "13-stud haul truck")`.
 - **Meshes:** don't import a mesh twice (duplicates are errors). BuildGuard checks the triangles of meshes the place owner owns; other meshes and unions only by their box, and the report's `Meshes:` line says how many. Tell the user when meshes were box-only. Flat details on a mesh still go through Layers.
@@ -56,11 +58,11 @@ For the step-by-step order to build each kind of thing (session start, landscape
   - a VehicleSeat, and `PrimaryPart` = the chassis with its front facing -Z;
   - details (springs, struts, mirrors, arms) welded, and no colliding part overlapping another unless a NoCollisionConstraint joins them. Invisible collision boxes count.
 
-  Then run `print((BG.checkVehicle(workspace.Vehicles.Truck)))` and show the user every `FAIL` and `check` line. Don't change the project limits without their OK.
+  Then run `return (BG.checkVehicle(workspace.Vehicles.Truck))` and show the user every `FAIL` and `check` line. Don't change the project limits without their OK.
 - **Lay out roads, rails and buildings on the 4-stud grid:** `part.CFrame = BG.snapToGrid(cf)`. This rounds X and Z only. Heights come from the snap and from layers, so never round heights or small detail to the grid.
 - **Labels, helpers and NPCs** that BuildGuard shouldn't check: tag the model or folder `BuildGuardIgnore` (CollectionService) or set the attribute.
 - Set `Size` and `CFrame` before `Parent`, and anchor static parts.
-- Do the build in a few `run_code` calls, not one per part, and `print` what you made so you can see it.
+- Do the build in a few calls, not one per part, and return a short summary of what each call made.
 
 ## 2. Adjust the config for what you're building
 
@@ -69,7 +71,7 @@ Each model can carry its own settings. Set them on the model you're building, be
 ```lua
 local BG = require(game.ServerStorage.BuildGuard)
 BG.setConfig(workspace.MountainPass, { maxSlopeChange = 25 }, "switchback road up the cliff")
-print(BG.explainConfig(workspace.MountainPass))   -- every setting and where it comes from
+return BG.explainConfig(workspace.MountainPass)   -- every setting and where it comes from
 BG.clearConfig(workspace.MountainPass, { "maxSlopeChange" })   -- or clearConfig(model) for all
 ```
 
@@ -86,15 +88,15 @@ BG.clearConfig(workspace.MountainPass, { "maxSlopeChange" })   -- or clearConfig
 
 ```lua
 local BG = require(game.ServerStorage.BuildGuard)
-print(BG.check(workspace.YourBuild))   -- report + fix preview; changes nothing
+return BG.check(workspace.YourBuild)   -- report + fix preview; changes nothing
 ```
 
 For a big area (a whole map), start it in the background and poll, so the call doesn't time out:
 
 ```lua
-local id = BG.startCheck(workspace.Map)
-print(id)                       -- then, in later calls:
-print(BG.jobStatus(id))         -- progress, or the full report when done
+return BG.startCheck(workspace.Map)        -- the job id; then, in later calls:
+return (BG.jobStatus("<id>"))              -- progress, or the full report when done
+return (BG.jobStatus("<id>", { page = 2 })) -- long reports come a page (120 lines) at a time
 ```
 
 Read the report. Every message names parts by their path from the checked model (`Map/Tub/TubTop#3` is the third sibling named TubTop) and says where (`at (x, y, z)`); `BG.find(root, path)` gets the instance. Fix what you can by changing your build, or apply the automatic fixes (one Ctrl+Z step for the user):
@@ -102,8 +104,7 @@ Read the report. Every message names parts by their path from the checked model 
 ```lua
 local BG = require(game.ServerStorage.BuildGuard)
 local result = BG.fixAll(workspace.YourBuild)
-print(BG.format(result.report))
-print(BG.formatChanges(result))   -- each changed part and its exact nudge
+return BG.format(result.report) .. "\n\n" .. BG.formatChanges(result)   -- what's left, and each change made
 ```
 
 If a script builds the model, copy every change from the fix report into that script (each line gives the `part.CFrame *=` or `part.Size +=` to add). Otherwise the next rebuild brings the problems back.

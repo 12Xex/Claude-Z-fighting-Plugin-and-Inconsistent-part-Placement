@@ -1,6 +1,6 @@
 # BuildGuard workflows
 
-Step-by-step order for each kind of build. Every code block runs in Studio through the MCP tool that runs Luau (for example `run_code`). Start each block with:
+Step-by-step order for each kind of build. Every code block runs in Studio through the MCP tool that runs Luau (`execute_luau` on Studio's built-in server, `run_code` on the older one). End a block with `return <text>` to get its result back (print output may not come back). Start each block with:
 
 ```lua
 local BG = require(game.ServerStorage.BuildGuard)
@@ -11,18 +11,20 @@ local BG = require(game.ServerStorage.BuildGuard)
 1. Run the check from SKILL.md step 0 (installed, and version `"0.6.0"`).
 2. Find where things go. Print the top level of `workspace` and the model you'll work in, so you build into the user's existing structure:
    ```lua
-   for _, c in workspace:GetChildren() do print(c.ClassName, c:GetFullName()) end
+   local out = {}
+   for _, c in workspace:GetChildren() do table.insert(out, c.ClassName .. " " .. c:GetFullName()) end
+   return table.concat(out, "\n")
    ```
 3. Put each new thing in its own named `Model` (`HaulRoad_North`, `Town_Shop1`, `MineTunnel_A`). Checks, settings and the user's Ctrl+Z all work per model.
 4. Build in a few `run_code` calls per model, not one call per part. Print what each call made.
-5. Check the place-wide numbers once: `print(BG.explainConfig(workspace))`. If `roadHeadroom` is 0 and the game has trucks, measure the truck (Vehicles below) and propose `BG.setProjectConfig({ roadHeadroom = ... }, reason)` to the user.
+5. Check the place-wide numbers once: `return BG.explainConfig(workspace)`. If `roadHeadroom` is 0 and the game has trucks, measure the truck (Vehicles below) and propose `BG.setProjectConfig({ roadHeadroom = ... }, reason)` to the user.
 
 ## Fixing: your build vs. the user's
 
 - **Your own new model:** you may run `BG.fixAll(model)` after reading `BG.check(model)`.
 - **Anything the user already built:** run `BG.check` only. Show them the report and fix preview, and apply fixes only after they say yes. Every apply is one Ctrl+Z step in Studio.
-- **A model a script builds:** after `fixAll`, print `BG.formatChanges(result)` and put every change in the builder script (each line gives the `part.CFrame *= CFrame.new(...)` or `part.Size += Vector3.new(...)` to add to that part). Then rebuild and check again: a rebuild without them brings the problems back.
-- **A big area (a whole map):** `BG.check` can take longer than one call may wait. Use `local id = BG.startCheck(workspace.Map)`, then `print(BG.jobStatus(id))` in later calls until it says the report.
+- **A model a script builds:** after `fixAll`, return `BG.formatChanges(result)` and put every change in the builder script (each line gives the `part.CFrame *= CFrame.new(...)` or `part.Size += Vector3.new(...)` to add to that part). Then rebuild and check again: a rebuild without them brings the problems back.
+- **A big area (a whole map):** `BG.check` can take longer than one call may wait. Use `return BG.startCheck(workspace.Map)` to get a job id, then `return (BG.jobStatus("<id>", { page = 1 }))` in later calls until it gives the report (one page of 120 lines per call; ask for the next page until it stops saying "page n of m").
 
 ## Landscape and terrain
 
@@ -52,9 +54,10 @@ local BG = require(game.ServerStorage.BuildGuard)
 2. Snap the whole model, and read what was skipped:
    ```lua
    local plan, skipped = BG.planSnap(workspace.Map.HaulRoad_North)
-   print(BG.Plan.describe(plan))
-   for _, s in skipped do print("skipped", s.part.Name, s.reason) end
    BG.apply(plan)
+   local out = { BG.Plan.describe(plan) }
+   for _, s in skipped do table.insert(out, "skipped " .. s.part.Name .. ": " .. s.reason) end
+   return table.concat(out, "\n")
    ```
 3. **Hills:** pieces tilted more than 5° are ramps and aren't snapped, so place each one by its joints. Start from the top edge of the piece it joins, so there's no ledge:
    ```lua
@@ -68,7 +71,7 @@ local BG = require(game.ServerStorage.BuildGuard)
    ```
    Change direction gradually: no more than 20° between neighbours, and no piece steeper than 20° overall. Use switchbacks for anything steeper.
 4. Markings go on with `BG.Layers.place` (see Details).
-5. Run `print(BG.check(roads))`. Ledge, edge, slope, route slope and width warnings mean the layout needs changing; they have no automatic fix. An `edge` warning means the ground beside the road is too far below (or above) its top: make the road thinner, or shape the terrain up to the road's edge.
+5. Run `return BG.check(roads)`. Ledge, edge, slope, route slope and width warnings mean the layout needs changing; they have no automatic fix. An `edge` warning means the ground beside the road is too far below (or above) its top: make the road thinner, or shape the terrain up to the road's edge.
 
 ## Rails and minecart tracks
 
@@ -107,7 +110,7 @@ local BG = require(game.ServerStorage.BuildGuard)
    Run this before the building exists, or the ray hits the building.
 3. Walls: one wall runs the full length and the other stops where it meets it. Overlapping corners with level tops z-fight.
 4. Windows and doors: either sink the frame fully into the wall and put the glass on a layer, or make the frame thicker than the wall. Never make it exactly as thick.
-5. `print(BG.check(building))` and fix every error.
+5. `return BG.check(building)` and fix every error.
 
 ## Signs, markings, trim and other details
 
@@ -137,10 +140,10 @@ local BG = require(game.ServerStorage.BuildGuard)
    - suspension: a PrismaticConstraint or CylindricalConstraint with `LimitsEnabled = true` and the travel in `LowerLimit`/`UpperLimit` (or a SpringConstraint with `MinLength`/`MaxLength` beside it);
    - detail parts (springs, struts, shocks, mirrors, arms) welded, not loose.
 3. Collision parts: every pair of colliding parts in different assemblies that overlap at rest is a `collision` error, invisible hull and floor boxes included. Fix each one by moving or shrinking a part, welding it, or adding a NoCollisionConstraint between the two. Visual-only parts (tyre meshes, arches, mirrors) should have `CanCollide = false`.
-4. Check it in edit mode, parked: `print(BG.check(truck))`. `wheelsweep` warnings say which part a wheel hits, and at what steering angle and suspension travel; give that part room. `[NOTE]` lines say what couldn't be swept (no limits set, or a rig that builds its joints at runtime).
+4. Check it in edit mode, parked: `return BG.check(truck)`. `wheelsweep` warnings say which part a wheel hits, and at what steering angle and suspension travel; give that part room. `[NOTE]` lines say what couldn't be swept (no limits set, or a rig that builds its joints at runtime).
 5. Measure it, and show the user every `FAIL` and `check` line:
    ```lua
-   print((BG.checkVehicle(workspace.Vehicles.HaulTruck)))
+   return (BG.checkVehicle(workspace.Vehicles.HaulTruck))
    ```
    It measures two profiles: colliding parts for wheels, clearance, angles and ledges; visible parts for width (with mirrors) and height. Two trucks passing need 2 × the width with mirrors + 2. Don't change the project's road limits yourself. Propose the change and let the user decide.
 6. When the user has drive-tested a limit (a loaded truck over the 1-stud ledge, up the 20° climb), record it on the truck with what they said, so the row stops asking:
