@@ -12,7 +12,6 @@
 ]]
 
 local ChangeHistoryService = game:GetService("ChangeHistoryService")
-local CollectionService = game:GetService("CollectionService")
 local CoreGui = game:GetService("CoreGui")
 local Selection = game:GetService("Selection")
 local ServerStorage = game:GetService("ServerStorage")
@@ -295,8 +294,12 @@ local function showReport(report)
 	end
 end
 
-local function progressText(stage, done, total, seconds)
-	return ("Scanning: %s %s/%s (%.1fs)"):format(tostring(stage), tostring(done or 0), tostring(total or "?"), seconds)
+-- "Scanning: zfight 1200/5000 parts (check 3 of 4, 12.3s)". The parts are
+-- counted within the check, and only shown when the check counts them.
+local function progressText(stage, done, total, check, checks, seconds)
+	local parts = if (total or 0) > 0 then (" %d/%d parts"):format(done or 0, total) else ""
+	local which = if (checks or 0) > 0 then ("check %d of %d, "):format(check or 0, checks) else ""
+	return ("Scanning: %s%s (%s%.1fs)"):format(tostring(stage), parts, which, seconds)
 end
 
 -- "zfight 1.2s, buried 0.4s, offground 0.1s": the slowest steps of a scan.
@@ -354,21 +357,46 @@ local function scanSummary(report, seconds)
 	return text .. " Click a row to select its parts and look at the problem."
 end
 
+-- The roots still in the place (deleted ones, and ones an undo took out,
+-- are dropped), and how many were dropped.
+local function liveRoots(roots)
+	local live = {}
+	for _, r in roots or {} do
+		if r:IsDescendantOf(game) then
+			table.insert(live, r)
+		end
+	end
+	return live, #(roots or {}) - #live
+end
+
 -- `fresh` = take roots from the current scope (the Scan button). Otherwise
 -- re-scan what the last Scan covered: clicking a result row changes the
 -- selection, and that mustn't shrink the scan.
 local function scan(fresh)
-	local roots = if fresh or not state.roots then scopeRoots() else state.roots
-	if not roots then
-		setStatus("Select a model/folder/parts to scan, or switch scope to Workspace.")
+	local fromLast = not fresh and state.roots ~= nil
+	local roots, gone = liveRoots(if fromLast then state.roots else scopeRoots())
+	local note = ""
+	if gone > 0 then
+		note = ("%d of the scanned model(s)/part(s) are no longer in the place (deleted or undone) and were skipped. "):format(gone)
+	end
+	if fromLast and #roots == 0 then
+		state.roots = nil
+		roots = liveRoots(scopeRoots())
+		note = "What the last scan covered is no longer in the place (deleted or undone). "
+		if #roots > 0 then
+			note ..= ("Scanned the current %s instead. "):format(if state.scope == "Workspace" then "workspace" else "selection")
+		end
+	end
+	if #roots == 0 then
+		setStatus(note .. "Select a model/folder/parts to scan, or switch scope to Workspace.")
 		return nil
 	end
 	state.roots = roots
 	local started = os.clock()
 	setStatus("Scanning…")
 	local ok, report = pcall(BuildGuard.scan, roots, {
-		onProgress = function(stage, done, total)
-			setStatus(progressText(stage, done, total, os.clock() - started))
+		onProgress = function(stage, done, total, check, checks)
+			setStatus(progressText(stage, done, total, check, checks, os.clock() - started))
 		end,
 	})
 	if not ok then
@@ -379,7 +407,7 @@ local function scan(fresh)
 	state.pending = nil
 	showReport(report)
 	printScanDetails(report)
-	setStatus(scanSummary(report, os.clock() - started))
+	setStatus(note .. scanSummary(report, os.clock() - started))
 	return report
 end
 
@@ -485,34 +513,36 @@ local function onRevert()
 	setStatus("Reverted the last applied fixes. " .. status.Text)
 end
 
+-- Selected parts are snapped as they are; selected models and folders snap
+-- the roads/rails/tracks in them. Either way the library leaves ignored
+-- parts and vehicles alone (and lists the ones it skipped).
 local function onSnap()
-	local parts, seen = {}, {}
-	local tags = {
-		hasTag = function(instance, tag)
-			return CollectionService:HasTag(instance, tag)
-		end,
-	}
-	local function add(part)
-		if not seen[part] then
-			seen[part] = true
-			table.insert(parts, part)
-		end
-	end
+	local parts, containers = {}, {}
 	for _, selected in Selection:Get() do
-		if selected:IsA("BasePart") then
-			add(selected)
-		end
-		for _, d in selected:GetDescendants() do
-			if d:IsA("BasePart") and BuildGuard.Classify.kind(d, BuildGuard.Config.defaults, tags) then
-				add(d)
-			end
-		end
+		table.insert(if selected:IsA("BasePart") then parts else containers, selected)
 	end
-	if #parts == 0 then
+	if #parts + #containers == 0 then
 		setStatus("Select road/rail/track parts (or a model containing them) to snap.")
 		return
 	end
-	local plan, skipped = BuildGuard.planSnap(parts)
+	local plan, skipped = Plan.new(), {}
+	local function merge(more, moreSkipped)
+		for _, item in more.items do
+			if not plan.byPart[item.part] then
+				Plan.add(plan, item)
+			end
+		end
+		plan.deferred += more.deferred
+		for _, s in moreSkipped do
+			table.insert(skipped, s)
+		end
+	end
+	if #parts > 0 then
+		merge(BuildGuard.planSnap(parts))
+	end
+	for _, container in containers do
+		merge(BuildGuard.planSnap(container))
+	end
 	preview(plan, "Snap preview")
 	for _, s in skipped do
 		listRow(("skipped %s: %s"):format(s.part.Name, s.reason), COLORS.warning, function()
@@ -561,6 +591,12 @@ local function removeTestScene()
 	if state.testScene then
 		local scene = state.testScene
 		state.testScene = nil
+		-- Don't let Preview/Apply re-scan the scene once it's gone.
+		if state.roots and table.find(state.roots, scene.folder) then
+			state.roots = nil
+			state.report = nil
+			state.pending = nil
+		end
 		BuildGuard.withUndo("BuildGuard: remove test scene", function()
 			BuildGuard.TestScene.destroy(scene, require(script.Parent.BuildGuard.StudioWorld).new())
 		end)
@@ -576,10 +612,11 @@ local function onBuildScene()
 	clearList()
 	local world = require(script.Parent.BuildGuard.StudioWorld).new()
 	BuildGuard.withUndo("BuildGuard: build test scene", function()
+		-- Built from the place-wide settings the scan will apply to it.
 		state.testScene = BuildGuard.TestScene.build(
 			workspace,
 			world,
-			BuildGuard.Config.merge(),
+			(BuildGuard.getConfig(workspace)),
 			require(script.Parent.BuildGuard.SelfTest).DEFAULT_ORIGIN
 		)
 	end)
@@ -646,10 +683,11 @@ local function onFarView()
 		Selection:Set({ state.farView })
 	end
 	setStatus(
-		"Far-view rig built: pairs of plates with gaps from 0.005 to 0.2 studs, labelled, with camera spots at "
-			.. "100, 300 and 600 studs. Publish or Team Test it and look from each spot on a phone: the smallest "
-			.. "gap that doesn't flicker at your viewing distance is the one to use (set "
-			.. "BuildGuard_zFightViewDistance on map-sized models). "
+		"Far-view rig built: pairs of plates with gaps from 0.005 to 0.2 studs, labelled, with spawn pads "
+			.. "(View_100, View_300, View_600) that many studs away. Publish to a test place and join it on a phone "
+			.. "(phones can't join Team Test): players spawn on the View_ pads. Disable the map's own spawns while "
+			.. "testing, or reset to try another pad. The smallest gap that doesn't flicker at your viewing distance "
+			.. "is the one to use (set BuildGuard_zFightViewDistance on map-sized models). Delete the rig afterwards. "
 			.. ("It's at (%.0f, %.0f, %.0f) and selected: press F to look at it."):format(origin.X, origin.Y, origin.Z)
 	)
 end
