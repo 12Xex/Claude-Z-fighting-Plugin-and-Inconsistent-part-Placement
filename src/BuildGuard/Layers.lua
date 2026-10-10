@@ -14,7 +14,9 @@
 	`u`/`v` offsets move the item across the face from its centre.
 
 	Layer n sits n * layerLift above the face. Items that overlap each other
-	on the same face need different layers.
+	on the same face need different layers. In a model seen from far away
+	(zFightViewDistance), each layer lifts at least Config.faceGap instead,
+	so the layers don't flicker at that distance.
 ]]
 
 local Config = require(script.Parent.Config)
@@ -39,7 +41,11 @@ end
 function Layers.lift(layer, config)
 	config = config or Config.defaults
 	assert(type(layer) == "number" and layer >= 1 and layer % 1 == 0, "Layers: layer must be a whole number >= 1")
-	return layer * config.layerLift
+	local step = config.layerLift
+	if (config.zFightViewDistance or 0) > 0 then
+		step = math.max(step, Config.faceGap(config))
+	end
+	return layer * step
 end
 
 -- CFrame on the face of `surface` (offset by u/v), with UpVector = face normal.
