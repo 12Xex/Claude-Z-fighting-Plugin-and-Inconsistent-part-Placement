@@ -16,6 +16,7 @@ local baseEnv = {
 	Vector3 = roblox.Vector3,
 	CFrame = roblox.CFrame,
 	Color3 = roblox.Color3,
+	UDim2 = roblox.UDim2,
 	Enum = roblox.Enum,
 	Instance = roblox.Instance,
 	typeof = typeof,

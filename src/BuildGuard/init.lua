@@ -24,6 +24,7 @@ local Kinematics = require(script.Kinematics)
 local Plan = require(script.Plan)
 local Layers = require(script.Layers)
 local TestScene = require(script.TestScene)
+local FarView = require(script.FarView)
 local Vehicle = require(script.Vehicle)
 local ZFight = require(script.Checks.ZFight)
 local Buried = require(script.Checks.Buried)
@@ -42,6 +43,9 @@ BuildGuard.Classify = Classify
 BuildGuard.Plan = Plan
 BuildGuard.Layers = Layers
 BuildGuard.TestScene = TestScene
+BuildGuard.FarView = FarView
+-- The far-view rig is built from the plugin's test row like the test scene.
+TestScene.buildFarView = FarView.build
 
 local SEVERITY_ORDER = { error = 1, warning = 2 }
 local CHECK_ORDER = {
@@ -171,29 +175,57 @@ local function newContext(root, options)
 end
 BuildGuard.newContext = newContext
 
+-- The checks a scan runs, in order. Buried runs first: parts it flags are
+-- skipped by the off-ground check (one issue per part is enough).
+local CHECKS = {
+	{ name = "buried", run = function(ctx, state)
+		local issues = Buried.scan(ctx)
+		for _, issue in issues do
+			if issue.check == "buried" then
+				state.flagged[issue.parts[1]] = true
+			end
+		end
+		return issues
+	end },
+	{ name = "offground", run = function(ctx, state)
+		return Ground.scan(ctx, state.flagged)
+	end },
+	{ name = "zfight", run = function(ctx)
+		return ZFight.scan(ctx)
+	end },
+	{ name = "drivability", run = function(ctx)
+		return Drivability.scan(ctx)
+	end },
+}
+BuildGuard.CHECKS = CHECKS
+
 -- Scans everything under `root` (an Instance or a list of them).
--- Options: { world?, config? }.
--- Returns { issues, partCount, config, counts = { error, warning } }.
+-- Options: {
+--   world?, config?,
+--   yield?       -- false: never yield (default: yield between chunks when the
+--                   caller can, so Studio stays responsive)
+--   onProgress?  -- function(stage, done, total)
+-- }
+-- Returns { issues, partCount, config, world, counts = { error, warning },
+--   root, overrides, timings = { { name, seconds } }, seconds, coverage? }.
+-- Every issue has `paths` (its parts' paths from the scan root).
 function BuildGuard.scan(root, options)
+	options = options or {}
+	local started = Util.clock()
+	local timings = {}
 	local ctx = newContext(root, options)
+	table.insert(timings, { name = "collect", seconds = Util.clock() - started })
 	local issues = {}
-	local function add(list)
-		for _, issue in list do
+	local state = { flagged = {} }
+	for i, check in CHECKS do
+		ctx.progress(check.name, i - 1, #CHECKS)
+		local t = Util.clock()
+		for _, issue in check.run(ctx, state) do
 			table.insert(issues, issue)
 		end
+		table.insert(timings, { name = check.name, seconds = Util.clock() - t })
 	end
-
-	local buried = Buried.scan(ctx)
-	local flagged = {}
-	for _, issue in buried do
-		if issue.check == "buried" then
-			flagged[issue.parts[1]] = true
-		end
-	end
-	add(buried)
-	add(Ground.scan(ctx, flagged))
-	add(ZFight.scan(ctx))
-	add(Drivability.scan(ctx))
+	ctx.progress("done", #CHECKS, #CHECKS)
 	-- Invalid BuildGuard_ attributes found while resolving (they're ignored,
 	-- and the part falls back to its parent's settings).
 	local badConfig = {}
@@ -206,7 +238,7 @@ function BuildGuard.scan(root, options)
 				severity = "error",
 				parts = if e.instance:IsA("BasePart") then { e.instance } else {},
 				instance = e.instance,
-				message = ("%s attribute %s ignored: %s"):format(e.instance:GetFullName(), e.attribute, e.message),
+				message = ("%s attribute %s ignored: %s"):format(ctx.path(e.instance), e.attribute, e.message),
 			})
 		end
 	end
@@ -224,6 +256,10 @@ function BuildGuard.scan(root, options)
 	local counts = { error = 0, warning = 0 }
 	for _, issue in issues do
 		counts[issue.severity] += 1
+		issue.paths = {}
+		for i, part in issue.parts do
+			issue.paths[i] = ctx.path(part)
+		end
 	end
 	return {
 		issues = issues,
@@ -232,7 +268,13 @@ function BuildGuard.scan(root, options)
 		world = ctx.world,
 		counts = counts,
 		root = root,
+		roots = ctx.roots,
 		overrides = BuildGuard.describeOverrides(ctx.resolver.owners),
+		timings = timings,
+		seconds = Util.clock() - started,
+		coverage = ctx.coverage,
+		vehicleNotes = ctx.vehicleNotes,
+		path = ctx.path,
 	}
 end
 
@@ -261,6 +303,9 @@ function BuildGuard.planFixes(report, issues)
 	for _, issue in ZFight.plan(zfights, report.config, plan, report.world) do
 		table.insert(unfixed, issue)
 	end
+	for _, item in plan.items do
+		item.path = if report.path then report.path(item.part) else Util.path(item.part, report.roots)
+	end
 	return plan, unfixed
 end
 
@@ -282,6 +327,9 @@ function BuildGuard.planSnap(target, options)
 	end
 	local plan = Plan.new()
 	local skipped = Ground.planSnap(solids, ctx, plan)
+	for _, item in plan.items do
+		item.path = Util.path(item.part, if typeof(target) == "Instance" then { target } else nil)
+	end
 	return plan, skipped
 end
 
@@ -331,7 +379,8 @@ end
 
 -- Scan, plan, apply; repeat until nothing more can be fixed (a fix can expose
 -- another problem, e.g. a part nudged into a new neighbour).
--- Returns { report = final report, plans = { ... } }.
+-- Returns { report = final report, plans = { ... }, changes = Plan.changes }.
+-- Print BG.formatChanges(result) for the fix report.
 function BuildGuard.fixAll(root, options)
 	options = options or {}
 	local plans = {}
@@ -345,17 +394,49 @@ function BuildGuard.fixAll(root, options)
 		table.insert(plans, plan)
 		report = BuildGuard.scan(root, options)
 	end
-	return { report = report, plans = plans }
+	return { report = report, plans = plans, changes = Plan.changes(plans) }
+end
+
+-- Every part a fix changed, with its exact move/resize (net over all passes).
+-- Takes a plan, a list of plans, or a fixAll result.
+function BuildGuard.changes(planOrResult)
+	if planOrResult.changes then
+		return planOrResult.changes
+	end
+	return Plan.changes(planOrResult.plans or planOrResult)
+end
+
+-- The fix report as text, with the line to change in a builder script for
+-- each part (so a rebuild doesn't bring the problem back).
+function BuildGuard.formatChanges(planOrResult)
+	return Plan.formatChanges(BuildGuard.changes(planOrResult))
 end
 
 function BuildGuard.format(report)
 	local lines = {
-		("BuildGuard: %d part(s) scanned — %d error(s), %d warning(s)"):format(
+		("BuildGuard: %d part(s) scanned — %d error(s), %d warning(s)%s"):format(
 			report.partCount,
 			report.counts.error,
-			report.counts.warning
+			report.counts.warning,
+			if report.seconds then (" in %.2fs"):format(report.seconds) else ""
 		),
 	}
+	local coverage = report.coverage
+	if coverage and (coverage.meshTriangles or 0) + (coverage.meshBoxOnly or 0) > 0 then
+		local reasons = {}
+		for reason, count in coverage.reasons or {} do
+			table.insert(reasons, ("%s: %d"):format(reason, count))
+		end
+		table.sort(reasons)
+		table.insert(
+			lines,
+			("  Meshes: %d checked by their triangles, %d by their box only%s"):format(
+				coverage.meshTriangles or 0,
+				coverage.meshBoxOnly or 0,
+				if #reasons > 0 then " (" .. table.concat(reasons, "; ") .. ")" else ""
+			)
+		)
+	end
 	if #report.overrides > 0 then
 		table.insert(lines, "  Config overrides in effect:")
 		for _, o in report.overrides do
@@ -373,6 +454,20 @@ function BuildGuard.format(report)
 				if fixable then "" else "  (not auto-fixable)"
 			)
 		)
+	end
+	if report.vehicleNotes then
+		for model, notes in report.vehicleNotes do
+			for _, note in notes do
+				table.insert(lines, ("  [NOTE]    %s: %s"):format(if report.path then report.path(model) else model.Name, note))
+			end
+		end
+	end
+	if report.timings then
+		local parts = {}
+		for _, t in report.timings do
+			table.insert(parts, ("%s %.2fs"):format(t.name, t.seconds))
+		end
+		table.insert(lines, "  Time: " .. table.concat(parts, ", "))
 	end
 	return table.concat(lines, "\n")
 end
@@ -446,6 +541,21 @@ function BuildGuard.clearConfig(instance, keys)
 			instance:SetAttribute(Config.REASON_ATTRIBUTE, nil)
 		end
 	end)
+end
+
+-- Place-wide settings: attributes on workspace, which also apply to models
+-- outside workspace. Use this for the project's own numbers (the approved
+-- road width, the haul truck's headroom) so every model gets them.
+--     BG.setProjectConfig({ roadHeadroom = 10.6 }, "Desperado is 9.6 tall")
+function BuildGuard.setProjectConfig(overrides, reason)
+	local place = Config.place()
+	assert(place, "BuildGuard.setProjectConfig: no workspace here")
+	BuildGuard.setConfig(place, overrides, reason)
+end
+
+-- The instance a report path ("Map/Tub/TubTop#3") names, or nil.
+function BuildGuard.find(root, path)
+	return Util.find(root, path)
 end
 
 -- Effective config for `instance`: config, sources (key -> instance that set it).
@@ -543,6 +653,143 @@ function BuildGuard.check(root, options)
 	local report = BuildGuard.scan(root, options)
 	local plan = BuildGuard.planFixes(report)
 	return BuildGuard.format(report) .. "\n\nFix preview (BuildGuard.fixAll applies it):\n" .. Plan.describe(plan)
+end
+
+--------------------------------------------------------------------------------
+-- Long checks: start one, then poll it
+--------------------------------------------------------------------------------
+
+-- A full-map check can take longer than a remote (MCP) call may wait. Start
+-- it, and it runs in the background, yielding between chunks so Studio
+-- stays responsive; poll it with BG.jobStatus(id).
+--     local id = BG.startCheck(workspace.Map)
+--     print(BG.jobStatus(id))   -- "running: zfight (3/4 checks, 12.3s)" or the report
+-- Jobs are kept as StringValues in ServerStorage.BuildGuardJobs (not saved
+-- with the place), so any later call can read them. The last 5 are kept.
+local MAX_JOBS = 5
+local MAX_TEXT = 190000
+local jobs = {}
+local jobCount = 0
+
+local function jobFolder(options)
+	if options.jobParent then
+		return options.jobParent
+	end
+	if not game then
+		return nil
+	end
+	local storage = game:GetService("ServerStorage")
+	local folder = storage:FindFirstChild("BuildGuardJobs")
+	if not folder then
+		folder = Instance.new("Folder")
+		folder.Name = "BuildGuardJobs"
+		folder.Archivable = false
+		folder.Parent = storage
+	end
+	return folder
+end
+
+local function newJobId()
+	jobCount += 1
+	if game then
+		local ok, guid = pcall(function()
+			return game:GetService("HttpService"):GenerateGUID(false)
+		end)
+		if ok then
+			return "check-" .. string.sub(guid, 1, 8)
+		end
+	end
+	return ("check-%d"):format(jobCount)
+end
+
+function BuildGuard.startCheck(root, options)
+	options = table.clone(options or {})
+	local id = newJobId()
+	local folder = jobFolder(options)
+	local record
+	if folder then
+		local existing = {}
+		for _, child in folder:GetChildren() do
+			if child:IsA("StringValue") then
+				table.insert(existing, child)
+			end
+		end
+		table.sort(existing, function(a, b)
+			return (a:GetAttribute("Started") or 0) < (b:GetAttribute("Started") or 0)
+		end)
+		for i = 1, #existing - MAX_JOBS + 1 do
+			existing[i]:Destroy()
+		end
+		record = Instance.new("StringValue")
+		record.Name = id
+		record.Archivable = false
+		record:SetAttribute("State", "running")
+		record:SetAttribute("Stage", "starting")
+		record:SetAttribute("Started", Util.clock())
+		record.Parent = folder
+	end
+	local job = { id = id, state = "running", stage = "starting", done = 0, total = 0, started = Util.clock(), record = record }
+	jobs[id] = job
+	local onProgress = options.onProgress
+	options.onProgress = function(stage, done, total)
+		job.stage, job.done, job.total = stage, done, total
+		if record then
+			record:SetAttribute("Stage", stage)
+			record:SetAttribute("Done", done)
+			record:SetAttribute("Total", total)
+			record:SetAttribute("Seconds", Util.clock() - job.started)
+		end
+		if onProgress then
+			onProgress(stage, done, total)
+		end
+	end
+	local function run()
+		local ok, text = pcall(BuildGuard.check, root, options)
+		job.state = if ok then "done" else "failed"
+		job.text = if ok then text else ("BuildGuard check %s failed: %s"):format(id, tostring(text))
+		job.seconds = Util.clock() - job.started
+		if record then
+			local stored = job.text
+			if #stored > MAX_TEXT then
+				stored = string.sub(stored, 1, MAX_TEXT) .. "\n... (report cut short; check smaller models for the rest)"
+			end
+			record.Value = stored
+			record:SetAttribute("Seconds", job.seconds)
+			record:SetAttribute("State", job.state)
+		end
+	end
+	if task then
+		task.spawn(run)
+	else
+		run()
+	end
+	return id
+end
+
+-- Status of a started check: text, state ("running" | "done" | "failed" |
+-- "unknown"). When done, the text is the full report and fix preview.
+function BuildGuard.jobStatus(id, options)
+	local job = jobs[id]
+	local record = job and job.record
+	if not record then
+		local folder = jobFolder(options or {})
+		record = folder and folder:FindFirstChild(id)
+	end
+	if job and job.state ~= "running" then
+		return job.text, job.state
+	end
+	if record and record:GetAttribute("State") ~= "running" then
+		return record.Value, record:GetAttribute("State")
+	end
+	if job or record then
+		local stage = if job then job.stage else record:GetAttribute("Stage")
+		local done = if job then job.done else record:GetAttribute("Done") or 0
+		local total = if job then job.total else record:GetAttribute("Total") or 0
+		local seconds = if job then Util.clock() - job.started else record:GetAttribute("Seconds") or 0
+		return ("BuildGuard check %s running: %s (%d/%d checks done, %.1fs so far)"):format(id, tostring(stage), done, total, seconds),
+			"running"
+	end
+	return ("No BuildGuard check %s (only the last %d are kept)"):format(tostring(id), MAX_JOBS), "unknown"
 end
 
 -- Builds the planted-problem test scene and proves every problem is found and

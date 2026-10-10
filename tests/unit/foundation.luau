@@ -311,3 +311,94 @@ test("collision filters: same assembly, hinge pairs, NoCollisionConstraint, grou
 	wheels[3].CanCollide = false
 	expect(not Kinematics.canCollide(fender, wheels[3], g, a, world), "CanCollide off")
 end)
+
+T.section("Core: timings, fix report, jobs, far-view rig")
+
+test("scan reports per-check timings and yields when it can", function()
+	local root, world, part = setup()
+	part("Wall", Vector3.new(10, 10, 1), CFrame.new(0, 5, 0))
+	local stages = {}
+	local report
+	local thread = coroutine.create(function()
+		report = BG.scan(root, { world = world, onProgress = function(stage)
+			table.insert(stages, stage)
+		end })
+	end)
+	local ok, err = coroutine.resume(thread)
+	expect(ok, tostring(err))
+	expect(report and #report.timings >= 5, "collect + one per check")
+	for _, t in report.timings do
+		expect(type(t.name) == "string" and t.seconds >= 0)
+	end
+	expect(world.yields > 0, "yielded between checks")
+	expect(table.find(stages, "zfight") and table.find(stages, "done"))
+	expect(string.find(BG.format(report), "Time: collect", 1, true), BG.format(report))
+	local before = world.yields
+	BG.scan(root, { world = world, yield = false })
+	expect(world.yields == before, "yield = false never yields")
+end)
+
+test("fix report lists each part with its exact change and the builder line", function()
+	local root, world, part = setup()
+	local m = Instance.new("Model")
+	m.Name = "Shop"
+	m.Parent = root
+	part("Wall", Vector3.new(10, 10, 1), CFrame.new(0, 5, 0), m)
+	part("Sign", Vector3.new(2, 2, 0.4), CFrame.new(3, 5, -0.3), m)
+	-- The second sign is turned around, so its own Z axis is world -Z.
+	part("Sign", Vector3.new(2, 2, 0.4), CFrame.new(-3, 5, -0.3) * CFrame.Angles(0, math.pi, 0), m)
+	local result = BG.fixAll(m, { world = world })
+	expect(#result.changes == 2, "two signs changed")
+	local text = BG.formatChanges(result)
+	expect(string.find(text, "Shop/Sign#1", 1, true) and string.find(text, "Shop/Sign#2", 1, true), text)
+	local byPath = {}
+	for _, c in result.changes do
+		byPath[c.path] = c
+	end
+	near(byPath["Shop/Sign#1"].move.Z, -0.02, 1e-4, "world move")
+	near(byPath["Shop/Sign#1"].moveLocal.Z, -0.02, 1e-4, "same in its own axes")
+	near(byPath["Shop/Sign#2"].move.Z, -0.02, 1e-4, "world move")
+	near(byPath["Shop/Sign#2"].moveLocal.Z, 0.02, 1e-4, "flipped in its own axes")
+	expect(string.find(text, "builder: part.CFrame *= CFrame.new(0.0000, 0.0000, -0.0200)", 1, true), text)
+	expect(string.find(text, "builder: part.CFrame *= CFrame.new(0.0000, 0.0000, 0.0200)", 1, true), text)
+end)
+
+test("startCheck runs a check as a job and jobStatus returns it", function()
+	local root, world, part = setup()
+	part("Wall", Vector3.new(10, 10, 1), CFrame.new(0, 5, 0))
+	part("Sign", Vector3.new(2, 2, 0.4), CFrame.new(0, 5, -0.3))
+	local jobsFolder = Instance.new("Folder")
+	local id = BG.startCheck(root, { world = world, jobParent = jobsFolder })
+	local text, state = BG.jobStatus(id, { jobParent = jobsFolder })
+	expect(state == "done", state .. ": " .. text)
+	expect(string.find(text, "z-fight", 1, true) and string.find(text, "Fix preview", 1, true), text)
+	expect(jobsFolder:FindFirstChild(id).Value == text, "stored for later calls")
+	local _, unknown = BG.jobStatus("nope", { jobParent = jobsFolder })
+	expect(unknown == "unknown")
+	for _ = 1, 7 do
+		BG.startCheck(root, { world = world, jobParent = jobsFolder })
+	end
+	expect(#jobsFolder:GetChildren() <= 5, "old jobs are removed")
+end)
+
+test("far-view rig: every gap pair is built, labelled and ignored by scans", function()
+	local root, world = setup()
+	local rig = BG.TestScene.buildFarView(root, Vector3.new(0, 0, 0))
+	for _, gap in BG.FarView.GAPS do
+		local base = rig.folder:FindFirstChild(("Flat_%g"):format(gap))
+		local overlay = rig.folder:FindFirstChild(("FlatOverlay_%g"):format(gap))
+		expect(base and overlay, "pair " .. gap)
+		local baseTop = base.CFrame.Position.Y + base.Size.Y / 2
+		local overlayTop = overlay.CFrame.Position.Y + overlay.Size.Y / 2
+		near(overlayTop - baseTop, gap, 1e-4, "gap " .. gap)
+	end
+	expect(rig.folder:FindFirstChild("View_300"))
+	local report = BG.scan(root, { world = world })
+	expect(report.partCount == 1, "only the ground is scanned")
+end)
+
+test("setProjectConfig needs a place; find reverses paths", function()
+	expect(not pcall(BG.setProjectConfig, { roadHeadroom = 10 }, "x"), "no workspace under Lune")
+	local root = setup()
+	expect(BG.find(root, "Workspace/Ground") == root.Ground)
+end)
