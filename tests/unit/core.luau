@@ -583,7 +583,10 @@ end)
 
 T.section("Self-test (planted-problem scene)")
 
-for _, overrides in { {}, { maxLedge = 0.25, maxSlopeChange = 8 }, { maxLedge = 1, maxSlopeChange = 30 } } do
+-- maxLedge 0.5, not 0.25: the scene's roads must be thin enough to drive up
+-- onto from the ground (thickness + roadLift under maxLedge), and 0.25
+-- leaves no room for a road plus its lift.
+for _, overrides in { {}, { maxLedge = 0.5, maxSlopeChange = 8 }, { maxLedge = 1, maxSlopeChange = 30 } } do
 	local label = {}
 	for k, v in overrides do
 		table.insert(label, k .. "=" .. tostring(v))

@@ -7,20 +7,27 @@
 	inside terrain or another part, or a ray cast down from `buriedClearance`
 	above it hits something before reaching it.
 
-	Other roads/rails/tracks and layered items never count as cover: rails sit
-	on track beds, and markings lie on roads.
+	Never cover: other roads/rails/tracks and layered items (rails sit on
+	track beds, and markings lie on roads), ignored things (BuildGuardIgnore)
+	and vehicles parked on the road.
 
 	Headroom (separate, warning): when the part isn't buried and its kind's
 	headroom setting is above 0, rays go straight up from the same points and
-	anything closer than that (a tunnel roof, a bridge) is reported.
+	anything closer than that (a tunnel roof, a bridge) is reported. What
+	can't be cover can't be a ceiling either.
 
 	Fix: when everything covering the part is ground (terrain, baseplate...),
 	the fix is a snap onto that ground's surface. When it's an ordinary part
-	(a crate, a building) there's no safe automatic answer, so it's only flagged.
+	(a crate, a building, a floor slab) there's no safe automatic answer, so
+	it's only flagged.
+
+	Messages name parts by their path from the scan root and say where to
+	look: the middle of the covered points, or the lowest ceiling point.
 ]]
 
 local Geometry = require(script.Parent.Parent.Geometry)
 local Classify = require(script.Parent.Parent.Classify)
+local Util = require(script.Parent.Parent.Util)
 local Ground = require(script.Parent.Ground)
 
 local Buried = {}
@@ -33,78 +40,101 @@ local function coverIgnore(part, ctx)
 		if not instance:IsA("BasePart") or ctx.world.isTerrain(instance) then
 			return false
 		end
-		return Classify.isLayered(instance) or ctx.kindOf(instance) ~= nil
+		return Classify.isLayered(instance)
+			or ctx.kindOf(instance) ~= nil
+			or ctx.isIgnored(instance)
+			or ctx.vehicleOf(instance) ~= nil
 	end
 end
 
-function Buried.scan(ctx)
+local function nameOf(ctx, instance)
+	return if ctx.world.isTerrain(instance) then "Terrain" else ctx.path(instance)
+end
+
+-- What covers each sample point: covered count, covers in the order found,
+-- and the middle of the covered points.
+local function findCovers(s, samples, config, ignore, ctx)
 	local world = ctx.world
+	local up = s.axes[2]
+	local covered, seen, covers, sum = 0, {}, {}, Vector3.zero
+	for _, point in samples do
+		local probe = point + up * config.buriedProbeHeight
+		local cover
+		if world.isInsideTerrain(probe) then
+			cover = world.terrain
+		else
+			cover = world.partAt(probe, ignore)
+			if not cover then
+				local hit = world.raycast(probe + up * config.buriedClearance, -up * config.buriedClearance, ignore)
+				cover = hit and hit.instance
+			end
+		end
+		if cover then
+			covered += 1
+			sum += point
+			if not seen[cover] then
+				seen[cover] = true
+				table.insert(covers, cover)
+			end
+		end
+	end
+	return covered, covers, if covered > 0 then sum / covered else nil
+end
+
+local function buriedIssue(s, kind, samples, covered, covers, position, ctx)
+	local names, allGround = {}, true
+	for _, cover in covers do
+		table.insert(names, nameOf(ctx, cover))
+		if not Classify.isGroundLike(cover, ctx.config) and not ctx.world.isTerrain(cover) then
+			allGround = false
+		end
+	end
+	local issue = {
+		check = "buried",
+		severity = "error",
+		parts = { s.part },
+		covers = covers,
+		position = position,
+		message = ("%s %s is buried under %s at %s (%d/%d sample points)"):format(
+			kind,
+			ctx.path(s.part),
+			table.concat(names, ", "),
+			Util.vector(position),
+			covered,
+			#samples
+		),
+	}
+	if allGround then
+		local m = Ground.measure(s, ctx)
+		if m.delta and m.delta > 0 then
+			issue.fixItems = Ground.items(s, ctx, m.delta, "buried", ("lift onto ground (%+.3f)"):format(m.delta))
+		end
+	end
+	if not issue.fixItems then
+		issue.message ..= " — move the cover or the " .. string.lower(kind) .. " by hand"
+	end
+	return issue
+end
+
+function Buried.scan(ctx)
 	local issues = {}
 	for _, s in ctx.solids do
 		local kind = ctx.kindOf(s.part)
 		if kind then
 			local config = ctx.configFor(s.part)
 			local ignore = coverIgnore(s.part, ctx)
-			local up = s.axes[2]
-			local covered, covers, coverOrder = 0, {}, {}
 			local samples = Geometry.faceSamples(s, "Top", 0.05, 0.25, config.sampleSpacing)
-			for _, point in samples do
-				local probe = point + up * config.buriedProbeHeight
-				local cover
-				if world.isInsideTerrain(probe) then
-					cover = world.terrain
-				else
-					cover = world.partAt(probe, ignore)
-					if not cover then
-						local hit = world.raycast(probe + up * config.buriedClearance, -up * config.buriedClearance, ignore)
-						cover = hit and hit.instance
-					end
-				end
-				if cover then
-					covered += 1
-					if not covers[cover] then
-						covers[cover] = true
-						table.insert(coverOrder, cover)
-					end
-				end
-			end
+			local covered, covers, position = findCovers(s, samples, config, ignore, ctx)
+			local issue
 			if covered > 0 then
-				local names, allGround = {}, true
-				for _, cover in coverOrder do
-					table.insert(names, cover.Name)
-					if not Classify.isGroundLike(cover, ctx.config) and not world.isTerrain(cover) then
-						allGround = false
-					end
-				end
-				local issue = {
-					check = "buried",
-					severity = "error",
-					parts = { s.part },
-					covers = coverOrder,
-					message = ("%s %s is buried under %s (%d/%d sample points)"):format(
-						kind,
-						s.part.Name,
-						table.concat(names, ", "),
-						covered,
-						#samples
-					),
-				}
-				if allGround then
-					local m = Ground.measure(s, ctx)
-					if m.delta and m.delta > 0 then
-						issue.fixItems = Ground.items(s, ctx, m.delta, "buried", ("lift onto ground (%+.3f)"):format(m.delta))
-					end
-				end
-				if not issue.fixItems then
-					issue.message ..= " — move the cover or the " .. string.lower(kind) .. " by hand"
-				end
-				table.insert(issues, issue)
+				issue = buriedIssue(s, kind, samples, covered, covers, position, ctx)
 			else
-				local issue = Buried.headroom(s, kind, samples, config, ignore, ctx)
-				if issue then
-					table.insert(issues, issue)
-				end
+				issue = Buried.headroom(s, kind, samples, config, ignore, ctx)
 			end
+			if issue then
+				table.insert(issues, issue)
+			end
+			ctx.yield()
 		end
 	end
 	return issues
@@ -115,19 +145,20 @@ local HEADROOM_KEY = { Road = "roadHeadroom", Rail = "railHeadroom", Track = "tr
 -- Headroom: the clear height above a road/rail/track (tunnel roofs, bridges,
 -- overhangs) must be at least its kind's headroom setting (0 = off).
 function Buried.headroom(s, kind, samples, config, ignore, ctx)
-	local need = config[HEADROOM_KEY[kind]]
+	local key = HEADROOM_KEY[kind]
+	local need = config[key]
 	if not need or need <= 0 then
 		return nil
 	end
 	local up = s.axes[2]
-	local lowest, ceiling = math.huge, nil
+	local lowest, ceiling, at = math.huge, nil, nil
 	for _, point in samples do
 		local probe = point + up * config.buriedProbeHeight
 		local hit = ctx.world.raycast(probe, up * (need - config.buriedProbeHeight), ignore)
 		if hit then
 			local clear = (hit.position - point):Dot(up)
 			if clear < lowest then
-				lowest, ceiling = clear, hit.instance
+				lowest, ceiling, at = clear, hit.instance, hit.position
 			end
 		end
 	end
@@ -135,19 +166,20 @@ function Buried.headroom(s, kind, samples, config, ignore, ctx)
 		return nil
 	end
 	local _, sources = ctx.configFor(s.part)
-	local key = HEADROOM_KEY[kind]
 	return {
 		check = "headroom",
 		severity = "warning",
 		parts = { s.part },
+		position = at,
 		value = lowest,
-		message = ("%s %s has %.1f studs of headroom under %s (needs %.1f%s)"):format(
+		message = ("%s %s has %.1f studs of headroom under %s at %s (needs %.1f%s)"):format(
 			kind,
-			s.part.Name,
+			ctx.path(s.part),
 			lowest,
-			ceiling.Name,
+			nameOf(ctx, ceiling),
+			Util.vector(at),
 			need,
-			if sources[key] then ", set on " .. sources[key].Name else ""
+			if sources[key] then ", set on " .. ctx.path(sources[key]) else ""
 		),
 	}
 end

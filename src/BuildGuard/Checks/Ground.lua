@@ -10,9 +10,14 @@
 	open air and casts down from there. It then moves the part vertically so its lowest point sits its kind's
 	lift (roadLift / railLift / trackLift, else groundLift) above the highest
 	ground hit. "Ground" is terrain, or a part that starts
-	below the snapped part's bottom (see `ignoreFor`).
+	below the snapped part's bottom (see `ignoreFor`). Ignored things
+	(BuildGuardIgnore) and vehicles are never ground.
 
-	Layered items (markings, signs) on the part's top move with it.
+	Layered items (markings, signs) on the part's top move with it, unless
+	they're ignored.
+
+	Off-ground messages name the part by its path from the scan root; the
+	issue's position is the part's bottom centre.
 
 	Tilted parts (ramps, slopes) are skipped: a ramp is meant to leave the ground.
 ]]
@@ -30,7 +35,8 @@ end
 -- Raycast filter for snapping solid `s`. Ground under a part has to start
 -- below the part's bottom; anything starting at or above it (markings, crates,
 -- rails on a track bed) is resting on the part, not holding it up. Layered
--- items and parts of the same kind (overlapping junctions) never count.
+-- items, parts of the same kind (overlapping junctions), ignored things and
+-- vehicles never count.
 function Ground.ignoreFor(s, ctx)
 	local part = s.part
 	local kind = ctx.kindOf(part)
@@ -41,7 +47,7 @@ function Ground.ignoreFor(s, ctx)
 		if not instance:IsA("BasePart") or ctx.world.isTerrain(instance) then
 			return false
 		end
-		if Classify.isLayered(instance) then
+		if Classify.isLayered(instance) or ctx.isIgnored(instance) or ctx.vehicleOf(instance) ~= nil then
 			return true
 		end
 		if kind ~= nil and ctx.kindOf(instance) == kind then
@@ -51,19 +57,20 @@ function Ground.ignoreFor(s, ctx)
 	end
 end
 
--- Layered items and child parts riding on top of the part.
+-- Layered items and child parts riding on top of the part (ignored ones
+-- stay where they are).
 local function riders(s, ctx)
 	local out = {}
 	local seen = {}
 	for _, d in s.part:GetDescendants() do
-		if d:IsA("BasePart") then
+		if d:IsA("BasePart") and not ctx.isIgnored(d) then
 			seen[d] = true
 			table.insert(out, d)
 		end
 	end
 	local box = s.cf * CFrame.new(0, s.half.Y + 1, 0)
 	for _, other in ctx.world.partsInBox(box, Vector3.new(s.size.X, 2, s.size.Z)) do
-		if not seen[other] and other ~= s.part and Classify.isLayered(other) then
+		if not seen[other] and other ~= s.part and Classify.isLayered(other) and not ctx.isIgnored(other) then
 			local lp = s.cf:PointToObjectSpace(other.CFrame.Position)
 			if math.abs(lp.X) <= s.half.X and math.abs(lp.Z) <= s.half.Z and lp.Y >= s.half.Y and lp.Y <= s.half.Y + 2 then
 				seen[other] = true
@@ -134,7 +141,7 @@ function Ground.items(s, ctx, delta, check, reason)
 	local offset = Vector3.new(0, delta, 0)
 	local items = { Plan.item(s.part, check, reason, s.cf + offset) }
 	for _, rider in riders(s, ctx) do
-		table.insert(items, Plan.item(rider, check, "rides on " .. s.part.Name, rider.CFrame + offset))
+		table.insert(items, Plan.item(rider, check, "rides on " .. ctx.path(s.part), rider.CFrame + offset))
 	end
 	return items
 end
@@ -158,32 +165,46 @@ function Ground.planSnap(solids, ctx, plan)
 	return skipped
 end
 
+-- Off-ground issue for one road/rail/track, or nil.
+local function offGroundIssue(s, kind, ctx)
+	local m = Ground.measure(s, ctx)
+	local bottom = s.cf:PointToWorldSpace(Vector3.new(0, -s.half.Y, 0))
+	if m.delta and math.abs(m.delta) > ctx.configFor(s.part).groundTolerance then
+		local what = if m.delta < 0
+			then ("hovers %.2f studs above the ground"):format(-m.delta)
+			else ("is sunk %.2f studs into the ground"):format(m.delta)
+		return {
+			check = "offground",
+			severity = "warning",
+			parts = { s.part },
+			position = bottom,
+			value = m.delta,
+			message = ("%s %s %s"):format(kind, ctx.path(s.part), what),
+			fixItems = Ground.items(s, ctx, m.delta, "offground", ("snap to ground (%+.3f)"):format(m.delta)),
+		}
+	elseif m.skip == "no ground below" then
+		return {
+			check = "offground",
+			severity = "warning",
+			parts = { s.part },
+			position = bottom,
+			message = ("%s %s has no ground below it — put ground under it or move it"):format(kind, ctx.path(s.part)),
+		}
+	end
+	return nil
+end
+
 -- Roads/rails/tracks that are hovering above or sunk below the ground.
 function Ground.scan(ctx, alreadyFlagged)
 	local issues = {}
 	for _, s in ctx.solids do
 		local kind = ctx.kindOf(s.part)
 		if kind and not alreadyFlagged[s.part] then
-			local m = Ground.measure(s, ctx)
-			if m.delta and math.abs(m.delta) > ctx.configFor(s.part).groundTolerance then
-				local what = if m.delta < 0
-					then ("hovers %.2f studs above the ground"):format(-m.delta)
-					else ("is sunk %.2f studs into the ground"):format(m.delta)
-				table.insert(issues, {
-					check = "offground",
-					severity = "warning",
-					parts = { s.part },
-					message = ("%s %s %s"):format(kind, s.part.Name, what),
-					fixItems = Ground.items(s, ctx, m.delta, "offground", ("snap to ground (%+.3f)"):format(m.delta)),
-				})
-			elseif m.skip == "no ground below" then
-				table.insert(issues, {
-					check = "offground",
-					severity = "warning",
-					parts = { s.part },
-					message = ("%s %s has no ground below it"):format(kind, s.part.Name),
-				})
+			local issue = offGroundIssue(s, kind, ctx)
+			if issue then
+				table.insert(issues, issue)
 			end
+			ctx.yield()
 		end
 	end
 	return issues

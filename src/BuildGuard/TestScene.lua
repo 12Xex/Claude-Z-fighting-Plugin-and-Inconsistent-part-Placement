@@ -26,10 +26,15 @@
 	                                          roadHeadroom
 	  P15 Strut_FL           zfight     fix   truck strut welded flush to the chassis side; the
 	                                          weld must be updated to hold the nudged strut
+	  P16 Road_Thick         edge       flag  road so thick that the step from the ground up
+	                                          onto it is above maxLedge
 
 	Every size and height comes from the config (road width, lifts, limits),
 	so the scene plants real violations and real non-violations whatever
-	numbers are set.
+	numbers are set. Roads are thin enough that the step from the ground up
+	onto them (thickness + roadLift) stays under maxLedge, and the ramps and
+	the raised road have guardrails or a wider plinth beside them, so the
+	edge check only finds P16.
 
 	The MountainPass model carries BuildGuard_maxSlopeChange and
 	BuildGuard_maxRouteSlope attributes, so its steep road is allowed: a
@@ -76,10 +81,29 @@ function TestScene.build(parent, world, config, origin)
 	local function road(name, size, cframe)
 		return part(name, size, cframe, ASPHALT, Enum.Material.Asphalt)
 	end
+	-- Guardrails along a ramp's open sides (and across its +X end when
+	-- `acrossEnd`), so the edge check sees a barrier there, not a drop.
+	local function guardrails(ramp, acrossEnd)
+		local size = ramp.Size
+		local height = size.Y + 0.6
+		local function rail(railSize, offset)
+			local p = part("Guardrail", railSize, CFrame.new(), Color3.fromRGB(190, 190, 195), Enum.Material.Metal)
+			p.CFrame = ramp.CFrame * offset
+			p.Parent = ramp.Parent
+		end
+		for _, side in { -1, 1 } do
+			rail(Vector3.new(size.X, height, 1), CFrame.new(0, 0.3, side * (size.Z / 2 + 0.5)))
+		end
+		if acrossEnd then
+			rail(Vector3.new(1, height, size.Z + 2), CFrame.new(size.X / 2 + 0.5, 0.3, 0))
+		end
+	end
 
 	local W = config.minRoadWidth
-	local roadY = config.roadLift + 0.5 -- centre of a 1-stud road resting on the ground
-	local roadTop = config.roadLift + 1
+	-- Road thickness: thin enough that the step up from the ground stays under maxLedge.
+	local T = math.clamp(config.maxLedge - config.roadLift - 0.1, 0.2, 1)
+	local roadY = config.roadLift + T / 2 -- centre of a road resting on the ground
+	local roadTop = config.roadLift + T
 	local railY = config.railLift + 0.25 -- centre of a 0.5-stud rail on the ground
 	-- A road piece on its own is measured across its shorter side, so lone
 	-- pieces are longer than they are wide.
@@ -116,14 +140,14 @@ function TestScene.build(parent, world, config, origin)
 	))
 
 	-- Main road with bad and good markings.
-	local main = road("Road_Main", Vector3.new(100, 1, W), CFrame.new(0, roadY, 0))
+	local main = road("Road_Main", Vector3.new(100, T, W), CFrame.new(0, roadY, 0))
 	plant(part("LaneMarking_Flush", Vector3.new(6, 0.1, 0.5), CFrame.new(-30, roadTop - 0.05, 0), PAINT), "P2", "zfight", "fix", "flush with road top")
 	part("CrossMarkA", Vector3.new(8, 0.1, 0.4), CFrame.new(20, roadTop + 0.05, 0), PAINT)
 	plant(part("CrossMarkB", Vector3.new(0.4, 0.1, 8), CFrame.new(20, roadTop + 0.05, 0), PAINT), "P4", "zfight", "fix", "crossing markings, same height")
 	control(Layers.place(part("LaneMarking_Layered", Vector3.new(6, 0.1, 0.5), CFrame.new(), PAINT), main, { layer = 1, u = -10, config = config }))
 
 	-- Road cut through a terrain hill (hill sized to the road, on the 4-stud voxel grid).
-	plant(road("Road_HillCut", Vector3.new(L, 1, W), CFrame.new(-152, roadY, R)), "P5", "buried", "fix", "under terrain hill")
+	plant(road("Road_HillCut", Vector3.new(L, T, W), CFrame.new(-152, roadY, R)), "P5", "buried", "fix", "under terrain hill")
 	local hill = { cframe = base * CFrame.new(-152, 4, R), size = Vector3.new(snap8(L + 4), 8, snap8(W + 8)) }
 	world.fillTerrain(hill.cframe, hill.size, "Grass")
 
@@ -132,30 +156,33 @@ function TestScene.build(parent, world, config, origin)
 	part("Crate", Vector3.new(4, 4, 4), CFrame.new(-40, 2, -R), Color3.fromRGB(160, 120, 70), Enum.Material.WoodPlanks)
 
 	-- Road sunk into the ground slab, and one hovering above it.
-	plant(road("Road_Sunk", Vector3.new(L, 1, W), CFrame.new(60, -1, -R)), "P7", "buried", "fix", "sunk into ground")
-	local floating = road("Segment_Floating", Vector3.new(L, 1, W), CFrame.new(60, 3.5, 2 * R))
+	plant(road("Road_Sunk", Vector3.new(L, T, W), CFrame.new(60, -1, -R)), "P7", "buried", "fix", "sunk into ground")
+	local floating = road("Segment_Floating", Vector3.new(L, T, W), CFrame.new(60, 3.5, 2 * R))
 	floating:SetAttribute("BuildGuardKind", "Road")
 	plant(floating, "P8", "offground", "fix", "hovering 3 studs up")
 
 	-- A road too narrow for a truck.
-	plant(road("Road_Narrow", Vector3.new(L, 1, W * 0.6), CFrame.new(150, roadY, 2 * R)), "P12", "roadwidth", "flag", ("%.1f studs wide"):format(W * 0.6))
+	plant(road("Road_Narrow", Vector3.new(L, T, W * 0.6), CFrame.new(150, roadY, 2 * R)), "P12", "roadwidth", "flag", ("%.1f studs wide"):format(W * 0.6))
 
 	-- Drivability: a ledge and a steep slope off Road_A.
 	local ledge = math.min(config.maxLedge * 3, (config.maxLedge + config.connectMaxStep) / 2)
 	local steep = math.min(math.max(config.maxSlopeChange, config.maxRouteSlope) + 25, 75)
 	local zA = -2 * R
-	road("Road_A", Vector3.new(20, 1, W), CFrame.new(0, roadY, zA))
-	part("Plinth", Vector3.new(20, ledge, W), CFrame.new(20, ledge / 2, zA), Color3.fromRGB(170, 170, 160), Enum.Material.Concrete)
-	plant(road("Road_B_Raised", Vector3.new(20, 1, W), CFrame.new(20, ledge + roadY, zA)), "P9", "ledge", "flag", ("%.2f stud step"):format(ledge))
-	local steepRoad = road("Road_C_Steep", Vector3.new(16, 1, W), CFrame.new(-10, roadTop, zA) * CFrame.Angles(0, 0, -math.rad(steep)) * CFrame.new(-8, -0.5, 0))
+	road("Road_A", Vector3.new(20, T, W), CFrame.new(0, roadY, zA))
+	-- The plinth reaches a stud past the raised road's sides and far end, so
+	-- the ground beside that road is the plinth, not a drop.
+	part("Plinth", Vector3.new(21, ledge, W + 2), CFrame.new(20.5, ledge / 2, zA), Color3.fromRGB(170, 170, 160), Enum.Material.Concrete)
+	plant(road("Road_B_Raised", Vector3.new(20, T, W), CFrame.new(20, ledge + roadY, zA)), "P9", "ledge", "flag", ("%.2f stud step"):format(ledge))
+	local steepRoad = road("Road_C_Steep", Vector3.new(16, T, W), CFrame.new(-10, roadTop, zA) * CFrame.Angles(0, 0, -math.rad(steep)) * CFrame.new(-8, -T / 2, 0))
 	plant(steepRoad, "P10", "slope", "flag", ("%.0f° join"):format(steep))
+	guardrails(steepRoad)
 	table.insert(planted, { id = "P11", part = steepRoad, check = "routeslope", expect = "flag", note = ("%.0f° route"):format(steep) })
 
 	-- Controls: a gentle ramp, a correctly built road, rail and track.
 	local gentle = math.min(config.maxSlopeChange, config.maxRouteSlope) / 2
-	control(road("Road_E", Vector3.new(20, 1, W), CFrame.new(70, roadY, zA)))
-	control(road("Road_F_Gentle", Vector3.new(16, 1, W), CFrame.new(80, roadTop, zA) * CFrame.Angles(0, 0, math.rad(gentle)) * CFrame.new(8, -0.5, 0)))
-	local good = control(road("Road_Good", Vector3.new(math.max(30, W + 4), 1, W), CFrame.new(0, roadY, R)))
+	control(road("Road_E", Vector3.new(20, T, W), CFrame.new(70, roadY, zA)))
+	guardrails(control(road("Road_F_Gentle", Vector3.new(16, T, W), CFrame.new(80, roadTop, zA) * CFrame.Angles(0, 0, math.rad(gentle)) * CFrame.new(8, -T / 2, 0))), true)
+	local good = control(road("Road_Good", Vector3.new(math.max(30, W + 4), T, W), CFrame.new(0, roadY, R)))
 	control(Layers.place(part("StopLine", Vector3.new(0.6, 0.1, 10), CFrame.new(), PAINT), good, { layer = 1, u = 10, config = config }))
 	control(Layers.place(part("Arrow", Vector3.new(3, 0.1, 0.6), CFrame.new(), PAINT), good, { layer = 2, u = 10, config = config }))
 	control(part("Rail_Good", Vector3.new(20, 0.5, 1), CFrame.new(-60, railY, R), Color3.fromRGB(110, 110, 120), Enum.Material.Metal))
@@ -183,7 +210,7 @@ function TestScene.build(parent, world, config, origin)
 	mine:SetAttribute("BuildGuard_roadHeadroom", 14)
 	mine:SetAttribute("BuildGuardConfigReason", "haul truck is 13 studs tall")
 	mine.Parent = folder
-	local tunnelRoad = road("Road_Tunnel", Vector3.new(L, 1, W), CFrame.new(tx, 1.1, -2))
+	local tunnelRoad = road("Road_Tunnel", Vector3.new(L, T, W), CFrame.new(tx, config.roadLift + 0.5 + T / 2, -2))
 	tunnelRoad.Parent = mine
 	plant(tunnelRoad, "P13", "offground", "fix", "hovering 0.5 in a tunnel under a thin roof")
 	planted[#planted].expectBottomY = origin.Y + config.roadLift
@@ -224,8 +251,20 @@ function TestScene.build(parent, world, config, origin)
 	pass:SetAttribute("BuildGuardConfigReason", "switchback mountain road")
 	pass.Parent = folder
 	local zM = -3 * R
-	control(road("Road_M1", Vector3.new(20, 1, W), CFrame.new(-60, roadY, zM))).Parent = pass
-	control(road("Road_M2_Steep", Vector3.new(16, 1, W), CFrame.new(-50, roadTop, zM) * CFrame.Angles(0, 0, math.rad(steep)) * CFrame.new(8, -0.5, 0))).Parent = pass
+	control(road("Road_M1", Vector3.new(20, T, W), CFrame.new(-60, roadY, zM))).Parent = pass
+	local passRamp = control(road("Road_M2_Steep", Vector3.new(16, T, W), CFrame.new(-50, roadTop, zM) * CFrame.Angles(0, 0, math.rad(steep)) * CFrame.new(8, -T / 2, 0)))
+	passRamp.Parent = pass
+	guardrails(passRamp)
+
+	-- P16: a road piece on its own, too thick to drive up onto from the ground.
+	local thick = math.min(config.maxLedge + 0.5, (config.maxLedge + config.connectMaxStep) / 2)
+	plant(
+		road("Road_Thick", Vector3.new(L, thick, W), CFrame.new(60, config.roadLift + thick / 2, -3 * R)),
+		"P16",
+		"edge",
+		"flag",
+		("%.2f-stud step up from the ground"):format(thick + config.roadLift)
+	)
 
 	folder.Parent = parent
 	local terrain = { hill }
