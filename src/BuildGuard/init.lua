@@ -17,8 +17,10 @@
 ]]
 
 local Config = require(script.Config)
+local Util = require(script.Util)
 local Geometry = require(script.Geometry)
 local Classify = require(script.Classify)
+local Kinematics = require(script.Kinematics)
 local Plan = require(script.Plan)
 local Layers = require(script.Layers)
 local TestScene = require(script.TestScene)
@@ -66,8 +68,9 @@ local function newContext(root, options)
 	local config = Config.merge(options.config)
 	local world = options.world or defaultWorld()
 	local kinds = {}
-	local resolver = Config.resolver(config)
-	local ctx = { config = config, world = world, root = root, resolver = resolver }
+	local resolver = Config.resolver(config, options.place)
+	local roots = if root == nil then {} elseif typeof(root) == "Instance" then { root } else root
+	local ctx = { config = config, world = world, root = root, roots = roots, resolver = resolver, options = options }
 	-- Effective config for one part (call options + BuildGuard_ attributes on
 	-- it and its ancestors). Returns config, sources (key -> setting instance).
 	function ctx.configFor(part)
@@ -77,18 +80,78 @@ local function newContext(root, options)
 	function ctx.pairConfig(a, b)
 		return resolver.resolve(Config.commonAncestor(a, b))
 	end
+
+	-- Readable path from the scan root ("Map/Truck/TubTop#3"); see Util.path.
+	local paths = {}
+	function ctx.path(instance)
+		local p = paths[instance]
+		if not p then
+			p = Util.path(instance, roots)
+			paths[instance] = p
+		end
+		return p
+	end
+
+	-- At or under a BuildGuardIgnore instance (never scanned, never cover/ground).
+	local ignoredCache = {}
+	function ctx.isIgnored(instance)
+		return Classify.isIgnored(instance, ignoredCache)
+	end
+
+	-- Joints, assemblies and vehicles under the scan roots (worked out once).
+	local graph, vehicles, vehicleOwner
+	function ctx.graph()
+		if not graph then
+			graph = Kinematics.graph(roots)
+		end
+		return graph
+	end
+	function ctx.vehicles()
+		if not vehicles then
+			vehicles, vehicleOwner = Kinematics.vehicles(roots, ctx.graph())
+		end
+		return vehicles
+	end
+	function ctx.vehicleOf(part)
+		if #roots == 0 then
+			return nil
+		end
+		ctx.vehicles()
+		return vehicleOwner[part]
+	end
+	local function inVehicle(part)
+		return ctx.vehicleOf(part) ~= nil
+	end
 	function ctx.kindOf(part)
 		local kind = kinds[part]
 		if kind == nil then
-			kind = Classify.kind(part, config, world) or false
+			kind = Classify.kind(part, config, world, inVehicle) or false
 			kinds[part] = kind
 		end
 		return kind or nil
 	end
+
+	-- Long checks call ctx.yield() between pieces of work. It lets Studio
+	-- breathe (world.yield waits a frame once its time slice is used) unless
+	-- options.yield is false or the caller can't yield.
+	local canYield = options.yield ~= false and world.yield ~= nil and coroutine.isyieldable()
+	function ctx.yield()
+		if canYield then
+			world.yield()
+		end
+	end
+	-- Progress for long scans: options.onProgress(stage, done, total).
+	function ctx.progress(stage, done, total)
+		if options.onProgress then
+			options.onProgress(stage, done, total)
+		end
+		ctx.yield()
+	end
+
 	ctx.solids = {}
 	if root then
 		local seen = {}
-		for _, r in (if typeof(root) == "Instance" then { root } else root) do
+		for _, r in roots do
 			for _, part in Classify.collectParts(r) do
 				if not seen[part] then
 					seen[part] = true

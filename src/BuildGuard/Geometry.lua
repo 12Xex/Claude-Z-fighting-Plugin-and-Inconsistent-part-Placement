@@ -36,25 +36,32 @@ local function vec(axis, value)
 end
 Geometry.axisVector = vec
 
--- "Block" | "Wedge" | "Cylinder" | "Ball" | "Other" (mesh, union, truss, corner wedge)
+-- "Block" | "Wedge" | "CornerWedge" | "Cylinder" | "Ball" | "Other"
+-- (Other = mesh, union, truss: only its box is known)
 function Geometry.shapeOf(part)
 	if part:IsA("WedgePart") then
 		return "Wedge"
+	end
+	if part:IsA("CornerWedgePart") then
+		return "CornerWedge"
 	end
 	if part:IsA("Part") then
 		local ok, shape = pcall(function()
 			return part.Shape.Name
 		end)
 		if ok then
-			if shape == "Ball" or shape == "Cylinder" or shape == "Wedge" then
+			if shape == "Ball" or shape == "Cylinder" or shape == "Wedge" or shape == "CornerWedge" then
 				return shape
-			elseif shape == "CornerWedge" then
-				return "Other"
 			end
 		end
 		return "Block"
 	end
 	return "Other"
+end
+
+-- Meshes and unions: parts whose real surface isn't known from Size alone.
+function Geometry.isMeshLike(part)
+	return part:IsA("MeshPart") or part:IsA("PartOperation")
 end
 
 -- A snapshot of a part's box. Fixes change parts, so take fresh solids after.
@@ -145,6 +152,19 @@ local function localFaces(shape, h)
 			Vector3.new(h.X, -h.Y, -h.Z),
 			Vector3.new(-h.X, -h.Y, -h.Z),
 		}, Vector3.new(0, h.Z, -h.Y).Unit)
+	elseif shape == "CornerWedge" then
+		-- A pyramid on a full rectangular base; the apex is above the
+		-- bottom corner at +X, -Z (front right).
+		local A = Vector3.new(-h.X, -h.Y, -h.Z)
+		local B = Vector3.new(h.X, -h.Y, -h.Z)
+		local C = Vector3.new(-h.X, -h.Y, h.Z)
+		local D = Vector3.new(h.X, -h.Y, h.Z)
+		local E = Vector3.new(h.X, h.Y, -h.Z)
+		add("Bottom", 2, -1, { A, B, D, C })
+		add("Right", 1, 1, { B, E, D })
+		add("Front", 3, -1, { B, A, E })
+		add("SlopeLeft", nil, nil, { A, C, E }, Vector3.new(-h.Y, h.X, 0).Unit)
+		add("SlopeBack", nil, nil, { C, D, E }, Vector3.new(0, h.Z, h.Y).Unit)
 	elseif shape == "Cylinder" then
 		-- End caps (the cylinder runs along X), approximated as octagons.
 		local r = math.min(h.Y, h.Z)
@@ -296,9 +316,30 @@ local function project(points, origin, u, v)
 	return out
 end
 
+local function polygonCentroid(poly)
+	local area, cx, cy = 0, 0, 0
+	for i = 1, #poly do
+		local a, b = poly[i], poly[i % #poly + 1]
+		local cross = a[1] * b[2] - b[1] * a[2]
+		area += cross
+		cx += (a[1] + b[1]) * cross
+		cy += (a[2] + b[2]) * cross
+	end
+	if math.abs(area) < 1e-12 then
+		local sx, sy = 0, 0
+		for _, p in poly do
+			sx += p[1]
+			sy += p[2]
+		end
+		return sx / #poly, sy / #poly
+	end
+	return cx / (3 * area), cy / (3 * area)
+end
+
 -- If faces `fa` and `fb` point the same way, lie within `tolerance` of each
--- other and overlap, returns (overlapArea, distance) where distance is how far
--- fb's plane sits in front of fa's along fa's normal. Otherwise nil.
+-- other and overlap, returns (overlapArea, distance, centroid) where distance
+-- is how far fb's plane sits in front of fa's along fa's normal and centroid
+-- is the middle of the overlap (on fa's plane). Otherwise nil.
 function Geometry.coplanarOverlap(fa, fb, tolerance, minArea)
 	if fa.normal:Dot(fb.normal) < 1 - 1e-4 then
 		return nil
@@ -316,7 +357,105 @@ function Geometry.coplanarOverlap(fa, fb, tolerance, minArea)
 	if area < minArea then
 		return nil
 	end
-	return area, distance
+	local cx, cy = polygonCentroid(clipped)
+	return area, distance, fa.center + u * cx + v * cy
+end
+
+--------------------------------------------------------------------------------
+-- Vertices and support points (for convex overlap tests)
+--------------------------------------------------------------------------------
+
+local BOX_CORNERS = {}
+for _, x in { -1, 1 } do
+	for _, y in { -1, 1 } do
+		for _, z in { -1, 1 } do
+			table.insert(BOX_CORNERS, Vector3.new(x, y, z))
+		end
+	end
+end
+
+-- Local-space corner points of a solid's shape (nil for round shapes).
+-- "Other" (meshes, unions) gives its box corners.
+function Geometry.localVertices(shape, h)
+	if shape == "Block" or shape == "Other" then
+		local out = {}
+		for i, c in BOX_CORNERS do
+			out[i] = c * h
+		end
+		return out
+	elseif shape == "Wedge" then
+		return {
+			Vector3.new(-h.X, -h.Y, -h.Z),
+			Vector3.new(h.X, -h.Y, -h.Z),
+			Vector3.new(h.X, -h.Y, h.Z),
+			Vector3.new(-h.X, -h.Y, h.Z),
+			Vector3.new(-h.X, h.Y, h.Z),
+			Vector3.new(h.X, h.Y, h.Z),
+		}
+	elseif shape == "CornerWedge" then
+		return {
+			Vector3.new(-h.X, -h.Y, -h.Z),
+			Vector3.new(h.X, -h.Y, -h.Z),
+			Vector3.new(-h.X, -h.Y, h.Z),
+			Vector3.new(h.X, -h.Y, h.Z),
+			Vector3.new(h.X, h.Y, -h.Z),
+		}
+	end
+	return nil
+end
+
+-- World-space corner points of a solid (cached; nil for round shapes).
+function Geometry.vertices(s)
+	if s.vertices == nil then
+		local lv = Geometry.localVertices(s.shape, s.half)
+		if not lv then
+			s.vertices = false
+		else
+			local out = {}
+			for i, p in lv do
+				out[i] = s.cf:PointToWorldSpace(p)
+			end
+			s.vertices = out
+		end
+	end
+	return s.vertices or nil
+end
+
+-- The point of the solid furthest along world direction `dir` (its support
+-- point). Exact for every shape BuildGuard knows; meshes and unions use
+-- their box, or `s.hull` (world points) when set.
+function Geometry.support(s, dir)
+	local points = s.hull or Geometry.vertices(s)
+	if points then
+		local best, bestDot = points[1], -math.huge
+		for _, p in points do
+			local d = p:Dot(dir)
+			if d > bestDot then
+				best, bestDot = p, d
+			end
+		end
+		return best
+	end
+	local h = s.half
+	if s.shape == "Ball" then
+		local r = math.min(h.X, h.Y, h.Z)
+		local m = dir.Magnitude
+		if m < 1e-12 then
+			return s.pos
+		end
+		return s.pos + dir * (r / m)
+	end
+	-- Cylinder along local X.
+	local axis = s.axes[1]
+	local r = math.min(h.Y, h.Z)
+	local along = dir:Dot(axis)
+	local point = s.pos + axis * (if along >= 0 then h.X else -h.X)
+	local radial = dir - axis * along
+	local m = radial.Magnitude
+	if m > 1e-12 then
+		point += radial * (r / m)
+	end
+	return point
 end
 
 --------------------------------------------------------------------------------
@@ -335,6 +474,9 @@ function Geometry.containsPoint(s, p)
 		return true
 	elseif s.shape == "Wedge" then
 		return lp.Y / h.Y <= lp.Z / h.Z
+	elseif s.shape == "CornerWedge" then
+		local y = lp.Y / h.Y
+		return y <= lp.X / h.X and y <= -lp.Z / h.Z
 	elseif s.shape == "Cylinder" then
 		local r = math.min(h.Y, h.Z)
 		return lp.Y * lp.Y + lp.Z * lp.Z <= r * r

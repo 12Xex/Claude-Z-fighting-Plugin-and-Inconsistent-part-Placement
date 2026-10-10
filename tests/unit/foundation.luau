@@ -1,0 +1,313 @@
+-- Shared helpers: name words, paths, spatial hash keys, corner wedges,
+-- support points, place-wide config, classification, joints and vehicles.
+local T = require("../lib")
+local roblox, BG = T.roblox, T.BG
+local Instance, Vector3, CFrame, Enum = roblox.Instance, roblox.Vector3, roblox.CFrame, roblox.Enum
+local test, expect, near, setup = T.test, T.expect, T.near, T.setup
+
+local Util = require("../harness").module("Util")
+local Kinematics = require("../harness").module("Kinematics")
+
+T.section("Foundation")
+
+test("Util.words splits names at capitals, digits and punctuation", function()
+	local function same(name, expected)
+		local got = Util.words(name)
+		expect(table.concat(got, ",") == table.concat(expected, ","), name .. " -> " .. table.concat(got, ","))
+	end
+	same("RoadSign_02", { "road", "sign", "02" })
+	same("HTTPServer", { "http", "server" })
+	same("Wheel_FL", { "wheel", "fl" })
+	same("WheelFL", { "wheel", "fl" })
+	same("Railroad", { "railroad" })
+	same("TrackBed_Good", { "track", "bed", "good" })
+	same("BedRail", { "bed", "rail" })
+	same("road 7", { "road", "7" })
+	same("", {})
+end)
+
+test("Util.path tells repeated names apart and Util.find reverses it", function()
+	local root = Instance.new("Model")
+	root.Name = "Map"
+	local tub = Instance.new("Model")
+	tub.Name = "Tub"
+	tub.Parent = root
+	local tops = {}
+	for i = 1, 3 do
+		local p = Instance.new("Part")
+		p.Name = "TubTop"
+		p.Parent = tub
+		tops[i] = p
+	end
+	local other = Instance.new("Part")
+	other.Name = "Floor"
+	other.Parent = tub
+	expect(Util.path(tops[3], root) == "Map/Tub/TubTop#3", Util.path(tops[3], root))
+	expect(Util.path(other, root) == "Map/Tub/Floor", Util.path(other, root))
+	expect(Util.find(root, "Map/Tub/TubTop#2") == tops[2])
+	expect(Util.find(root, "Map/Tub/Floor") == other)
+	expect(Util.find(root, "Map/Tub/TubTop#4") == nil)
+	-- Outside the given roots: the path runs from the top.
+	expect(Util.path(tops[1], { other }) == "Map/Tub/TubTop#1", Util.path(tops[1], { other }))
+end)
+
+test("spatial hash keys are numbers and wrap without losing items", function()
+	local SpatialHash = require("../harness").module("SpatialHash")
+	expect(type(SpatialHash.key(1, -2, 3)) == "number")
+	expect(SpatialHash.key(1, 2, 3) ~= SpatialHash.key(3, 2, 1))
+	expect(SpatialHash.key(-1, 0, 0) == SpatialHash.key(65535, 0, 0), "wraps at 16 bits")
+	local hash = SpatialHash.new(8)
+	hash:insert("a", Vector3.new(-100, 0, -100), Vector3.new(-90, 5, -90))
+	hash:insert("b", Vector3.new(100000, 0, 0), Vector3.new(100004, 5, 4))
+	local near = hash:query(Vector3.new(-95, 1, -95), Vector3.new(-94, 2, -94))
+	expect(table.find(near, "a") ~= nil)
+	local far = hash:query(Vector3.new(100001, 1, 1), Vector3.new(100002, 2, 2))
+	expect(table.find(far, "b") ~= nil)
+end)
+
+test("corner wedge: faces point outward, apex at +X/-Z, containment", function()
+	local G = BG.Geometry
+	local p = Instance.new("CornerWedgePart")
+	p.Size = Vector3.new(4, 6, 8)
+	p.CFrame = CFrame.new(10, 3, -2) * CFrame.Angles(0.2, 0.5, -0.1)
+	local s = G.solid(p)
+	expect(s.shape == "CornerWedge")
+	local faces = G.faces(s)
+	expect(#faces == 5)
+	for _, f in faces do
+		expect(f.normal:Dot(f.center - s.pos) > 0, f.name .. " points inward")
+		for _, q in f.points do
+			near((q - f.center):Dot(f.normal), 0, 1e-3, f.name .. " planar")
+		end
+	end
+	local apex = s.cf:PointToWorldSpace(Vector3.new(2, 3, -4))
+	near((G.support(s, s.axes[2]) - apex).Magnitude, 0, 1e-3, "highest point is the apex")
+	expect(G.containsPoint(s, s.cf:PointToWorldSpace(Vector3.new(1.5, -2.5, -3.5))))
+	expect(not G.containsPoint(s, s.cf:PointToWorldSpace(Vector3.new(-1.5, 2.5, 3.5))), "far top corner is empty")
+	local shaped = Instance.new("Part")
+	shaped.Shape = Enum.PartType.CornerWedge
+	expect(G.shapeOf(shaped) == "CornerWedge")
+end)
+
+test("support points: box corner, ball surface, cylinder rim", function()
+	local G = BG.Geometry
+	local box = G.solidFrom(CFrame.new(), Vector3.new(2, 4, 6), "Block")
+	near((G.support(box, Vector3.new(1, 1, -1)) - Vector3.new(1, 2, -3)).Magnitude, 0, 1e-6)
+	local ball = G.solidFrom(CFrame.new(5, 0, 0), Vector3.new(4, 4, 4), "Ball")
+	near((G.support(ball, Vector3.new(0, 3, 0)) - Vector3.new(5, 2, 0)).Magnitude, 0, 1e-6)
+	local cyl = G.solidFrom(CFrame.new(), Vector3.new(2, 3, 3), "Cylinder")
+	near((G.support(cyl, Vector3.new(1, -1, 0)) - Vector3.new(1, -1.5, 0)).Magnitude, 0, 1e-6)
+end)
+
+test("coplanar overlap reports where the overlap is", function()
+	local G = BG.Geometry
+	local wall = G.solidFrom(CFrame.new(0, 5, 0), Vector3.new(10, 10, 1), "Block")
+	local sign = G.solidFrom(CFrame.new(3, 6, -0.3), Vector3.new(2, 2, 0.4), "Block")
+	local found
+	for _, fa in G.faces(wall) do
+		for _, fb in G.faces(sign) do
+			local area, _, at = G.coplanarOverlap(fa, fb, 0.01, 0.01)
+			if area then
+				found = at
+			end
+		end
+	end
+	expect(found ~= nil)
+	near((found - Vector3.new(3, 6, -0.5)).Magnitude, 0, 1e-4, "overlap centre")
+end)
+
+test("place-wide settings reach models outside the place root", function()
+	local place = Instance.new("Folder")
+	place.Name = "Workspace"
+	place:SetAttribute("BuildGuard_maxLedge", 0.7)
+	local storage = Instance.new("Folder")
+	local m = Instance.new("Model")
+	m.Parent = storage
+	local resolver = BG.Config.resolver(BG.Config.merge(), place)
+	local config, sources = resolver.resolve(m)
+	expect(config.maxLedge == 0.7 and sources.maxLedge == place)
+	m:SetAttribute("BuildGuard_maxLedge", 0.5)
+	expect(BG.Config.resolver(BG.Config.merge(), place).resolve(m).maxLedge == 0.5, "own setting still wins")
+end)
+
+test("face gap grows with zFightViewDistance", function()
+	local C = BG.Config
+	local config = C.merge()
+	expect(C.faceGap(config) == config.zFightNudge)
+	local far = C.merge({ zFightViewDistance = 600 })
+	expect(C.faceGap(far) > config.zFightNudge)
+	expect(not pcall(C.merge, { meshTriangles = 1 }), "booleans are checked")
+end)
+
+T.section("Classification")
+
+test("names: first word plus a flat shape; signs, lamps and bed rails aren't roads", function()
+	local config = BG.Config.merge()
+	local function kind(name, size, shape)
+		local p = Instance.new("Part")
+		p.Name = name
+		p.Size = size or Vector3.new(20, 1, 16)
+		if shape then
+			p.Shape = shape
+		end
+		return BG.Classify.kind(p, config)
+	end
+	expect(kind("Road_01") == "Road")
+	expect(kind("StreetCorner") == "Road")
+	expect(kind("RailYard", Vector3.new(20, 0.5, 1)) == "Rail")
+	expect(kind("Railroad", Vector3.new(20, 0.5, 1)) == "Rail")
+	expect(kind("TrackBed", Vector3.new(24, 0.5, 4)) == "Track")
+	expect(kind("BedRail", Vector3.new(8, 0.5, 0.5)) == nil, "BedRail")
+	expect(kind("RoofRail", Vector3.new(8, 0.5, 0.5)) == nil, "RoofRail")
+	expect(kind("Railing", Vector3.new(8, 3, 0.5)) == nil, "Railing")
+	expect(kind("Guardrail", Vector3.new(8, 1, 0.5)) == nil, "Guardrail")
+	expect(kind("RoadSign", Vector3.new(6, 4, 0.2)) == nil, "RoadSign is a standing panel")
+	expect(kind("StreetLamp", Vector3.new(1, 12, 1)) == nil, "StreetLamp is a pole")
+	expect(kind("RoadCone", Vector3.new(1, 1, 1), Enum.PartType.Cylinder) == nil, "round parts")
+	expect(kind("HaulRoad") == nil, "first word only")
+	local byTag = Instance.new("Part")
+	byTag.Name = "Thing"
+	byTag:AddTag("Road")
+	expect(BG.Classify.kind(byTag, config) == "Road", "tag")
+	expect(BG.Classify.kind(byTag, BG.Config.merge({ classifyByName = false })) == "Road", "tags work with names off")
+	local named = Instance.new("Part")
+	named.Name = "Road_9"
+	named.Size = Vector3.new(20, 1, 16)
+	expect(BG.Classify.kind(named, BG.Config.merge({ classifyByName = false })) == nil, "names off")
+	expect(BG.Classify.kind(named, config, nil, function()
+		return true
+	end) == nil, "parts of a vehicle never count by name")
+end)
+
+test("ground is explicit: big slabs aren't ground unless tagged or named", function()
+	local config = BG.Config.merge()
+	local slab = Instance.new("Part")
+	slab.Name = "FloorSlab"
+	slab.Size = Vector3.new(600, 1, 600)
+	expect(not BG.Classify.isGroundLike(slab, config), "size alone")
+	expect(BG.Classify.isGroundLike(slab, BG.Config.merge({ groundMinFootprint = 512 })), "footprint rule when switched on")
+	slab:AddTag("BuildGuardGround")
+	expect(BG.Classify.isGroundLike(slab, config), "tag")
+	slab:SetAttribute("BuildGuardGround", false)
+	expect(not BG.Classify.isGroundLike(slab, config), "attribute false beats the tag")
+	local base = Instance.new("Part")
+	base.Name = "Baseplate"
+	base.Size = Vector3.new(512, 16, 512)
+	expect(BG.Classify.isGroundLike(base, config))
+	local sign = Instance.new("Part")
+	sign.Name = "GroundSign"
+	sign.Size = Vector3.new(6, 4, 0.2)
+	expect(not BG.Classify.isGroundLike(sign, config), "not flat")
+end)
+
+test("BuildGuardIgnore works as a tag too", function()
+	local root, world, part = setup()
+	part("Wall", Vector3.new(10, 10, 1), CFrame.new(0, 5, 0))
+	local labels = Instance.new("Folder")
+	labels.Name = "Labels"
+	labels:AddTag("BuildGuardIgnore")
+	labels.Parent = root
+	part("Label", Vector3.new(2, 2, 0.4), CFrame.new(0, 5, -0.3), labels)
+	local report = BG.scan(root, { world = world })
+	expect(#T.checks(report, "zfight") == 0, BG.format(report))
+	expect(BG.Classify.isIgnored(labels.Label))
+end)
+
+test("wheels by name: wheel/tire + position words only", function()
+	local C = BG.Classify
+	for _, name in { "Wheel", "Wheel_FL", "WheelRR", "Tire_RearLeft", "Tyre2", "wheel front left" } do
+		expect(C.isWheelName(name), name)
+	end
+	for _, name in { "SteeringWheel", "SpareWheel", "WheelArch", "Wheel_Mesh", "TireTrack", "Hubcap" } do
+		expect(not C.isWheelName(name), name)
+	end
+end)
+
+-- A cart with a seat, a chassis, a welded bed rail and wheels on hinges.
+local function cart(parent)
+	local m = Instance.new("Model")
+	m.Name = "Cart"
+	local function p(name, size, cf, shape)
+		local x = Instance.new("Part")
+		x.Name, x.Size, x.CFrame = name, size, cf
+		if shape then
+			x.Shape = shape
+		end
+		x.Parent = m
+		return x
+	end
+	local chassis = p("Chassis", Vector3.new(6, 1, 10), CFrame.new(0, 2, 0))
+	local rail = p("BedRail", Vector3.new(0.4, 0.4, 10), CFrame.new(2.8, 2.7, 0))
+	local weld = Instance.new("WeldConstraint")
+	weld.Part0, weld.Part1, weld.Enabled = chassis, rail, true
+	weld.Parent = rail
+	local wheels = {}
+	for _, x in { -3.5, 3.5 } do
+		for _, z in { -4, 4 } do
+			local w = p("Wheel", Vector3.new(1, 2, 2), CFrame.new(x, 1, z), Enum.PartType.Cylinder)
+			local a0 = Instance.new("Attachment")
+			a0.CFrame = CFrame.new(x, -1, z)
+			a0.Parent = chassis
+			local a1 = Instance.new("Attachment")
+			a1.Parent = w
+			local hinge = Instance.new("HingeConstraint")
+			hinge.Attachment0, hinge.Attachment1 = a0, a1
+			hinge.Parent = chassis
+			table.insert(wheels, w)
+		end
+	end
+	m.Parent = parent
+	return m, chassis, rail, wheels
+end
+
+test("joints: assemblies, mechanisms, spinning wheels and the vehicle", function()
+	local root = setup()
+	local m, chassis, rail, wheels = cart(root)
+	local g = Kinematics.graph(root)
+	local assemblies = Kinematics.assemblies(g)
+	expect(assemblies.of[rail] == assemblies.of[chassis], "welded rail is in the chassis assembly")
+	expect(assemblies.of[wheels[1]] ~= assemblies.of[chassis], "a hinged wheel is its own assembly")
+	expect(Kinematics.mechanisms(g).of[wheels[1]] == Kinematics.mechanisms(g).of[chassis])
+	local spinning = BG.Classify.spinningParts(g.constraints)
+	for _, w in wheels do
+		expect(spinning[w], "wheel spins on its hinge")
+	end
+	expect(not spinning[chassis])
+	local vehicles, owner = Kinematics.vehicles(root, g)
+	expect(#vehicles == 1 and vehicles[1].model == m, "one vehicle, the Cart model")
+	expect(owner[rail] ~= nil and owner[root.Ground] == nil)
+	expect(#BG.Classify.wheels(m) == 4)
+end)
+
+test("parts in a vehicle are never roads or rails by name", function()
+	local root, world = setup()
+	local _, _, rail = cart(root)
+	rail.Name = "Rail_Bed"
+	local report = BG.scan(root, { world = world })
+	for _, issue in report.issues do
+		expect(not table.find(issue.parts, rail), "rail on the cart was linted: " .. issue.message)
+	end
+end)
+
+test("collision filters: same assembly, hinge pairs, NoCollisionConstraint, groups", function()
+	local root, world = setup()
+	local m, chassis, rail, wheels = cart(root)
+	local fender = Instance.new("Part")
+	fender.Name = "Fender"
+	fender.Parent = m
+	local g = Kinematics.graph(root)
+	local a = Kinematics.assemblies(g)
+	expect(not Kinematics.canCollide(chassis, rail, g, a, world), "same assembly")
+	expect(not Kinematics.canCollide(chassis, wheels[1], g, a, world), "a hinge's two parts don't collide")
+	expect(Kinematics.canCollide(fender, wheels[1], g, a, world), "loose fender and wheel do")
+	local nc = Instance.new("NoCollisionConstraint")
+	nc.Part0, nc.Part1, nc.Enabled = fender, wheels[1], true
+	nc.Parent = fender
+	g = Kinematics.graph(root)
+	expect(not Kinematics.canCollide(fender, wheels[1], g, a, world), "NoCollisionConstraint")
+	wheels[2].CollisionGroup = "Wheels"
+	world.nonColliding["Default|Wheels"] = true
+	expect(not Kinematics.canCollide(fender, wheels[2], g, a, world), "groups")
+	wheels[3].CanCollide = false
+	expect(not Kinematics.canCollide(fender, wheels[3], g, a, world), "CanCollide off")
+end)

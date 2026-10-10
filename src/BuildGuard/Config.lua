@@ -17,7 +17,12 @@
 	settings apply.
 
 	Z-fighting detection (tolerance, minimum overlap, ignored transparency) is
-	global: no model can loosen it.
+	global: no model can loosen it. A model can tighten it for distance
+	viewing with zFightViewDistance.
+
+	Place-wide settings are attributes on `workspace` (BG.setProjectConfig).
+	They also apply to models outside workspace (ServerStorage, a clone that
+	isn't parented yet), under any settings of their own.
 
 	Project numbers (roads, rails, layers, drivability) were approved for the
 	mining game; see README "Values".
@@ -37,6 +42,23 @@ Config.defaults = {
 	zFightNudge = 0.02,
 	-- Parts at or above this transparency are invisible and can't z-fight.
 	zFightIgnoreTransparency = 0.99,
+	-- Distance (studs) the model is seen from. Above 0, same-facing faces
+	-- must be at least Config.faceGap apart (bigger than zFightNudge far
+	-- away, where the depth buffer is coarser), fixes leave that gap, and
+	-- layers lift at least that much. 0 = off.
+	zFightViewDistance = 0,
+
+	-- Meshes ---------------------------------------------------------------------
+	-- Read MeshPart triangles through EditableMesh (meshes the place's owner
+	-- can load), so z-fighting is checked on the real surface. Other meshes
+	-- and unions are only checked by box, and the report says how many.
+	meshTriangles = true,
+	-- Meshes with more triangles than this are checked by box only.
+	meshTriangleLimit = 20000,
+	-- Two mesh/union boxes in the same orientation that share at least this
+	-- fraction of their volume (intersection over union) are flagged: a
+	-- likely double import or a z-fighting copy.
+	meshOverlapRatio = 0.9,
 
 	-- Layer offsets (road markings, signs, trim) ------------------------------
 	-- Each layer sits this far above the surface it's placed on:
@@ -81,27 +103,53 @@ Config.defaults = {
 	maxLedge = 1, -- studs of step between connected surfaces (truck-tested)
 	maxRouteSlope = 20, -- degrees: steepest any road/rail surface may tilt
 	maxSlopeChange = 20, -- degrees between connected surfaces (crests, dips)
-	minRoadWidth = 16, -- studs: one truck plus passing room
+	minRoadWidth = 22, -- studs: the approved haul road (two trucks pass)
+	-- Kinds whose free edges are checked for the step up from the ground
+	-- beside them (grass onto the road).
+	edgeLedgeKinds = { "Road" },
+	-- How far outside a road edge the ground beside it is measured.
+	edgeProbe = 0.5,
 	-- Road parts whose top surfaces are within this horizontal distance count
 	-- as connected.
 	connectMargin = 0.1,
 	-- Surfaces further apart vertically than this are an overpass, not a ledge.
 	connectMaxStep = 4,
 
+	-- Vehicles -------------------------------------------------------------------
+	-- Colliding parts of a vehicle that overlap by less than this are touching,
+	-- not overlapping.
+	collisionTolerance = 0.02,
+	-- Poses per joint when sweeping wheels through suspension travel and
+	-- steering lock (ends and rest always included).
+	sweepSteps = 5,
+	-- Steering lock (degrees each way) for a steering hinge that has no
+	-- limits set, e.g. a Servo whose angle comes from a script. 0 = unknown:
+	-- that hinge isn't swept and the report says so.
+	steerLock = 0,
+
 	-- Classification -----------------------------------------------------------
-	-- Lowercase name fragments, checked in this order (so "Railroad" is a Rail).
-	-- Tags (CollectionService) or the BuildGuardKind attribute take priority.
-	kindNamePatterns = {
-		{ kind = "Track", patterns = { "track" } },
-		{ kind = "Rail", patterns = { "rail" }, exclude = { "railing", "guardrail", "handrail" } },
-		{ kind = "Road", patterns = { "road", "street", "highway" } },
+	-- Set false to classify roads/rails/tracks by tag or attribute only.
+	classifyByName = true,
+	-- A part's name says its kind when its FIRST word is one of these (words
+	-- split at capitals, digits and punctuation: "RoadSign" is road + sign).
+	-- Checked in this order. Tags (CollectionService) and the BuildGuardKind
+	-- attribute take priority, and parts inside vehicles never count by name.
+	kindNameWords = {
+		{ kind = "Track", words = { "track", "tracks", "trackbed" } },
+		{ kind = "Rail", words = { "rail", "rails", "railroad", "railway" } },
+		{ kind = "Road", words = { "road", "roads", "roadway", "street", "highway" } },
 	},
+	-- ...and it is flat: no thicker (local Y) than this fraction of its
+	-- longest side, so "RoadSign" panels and "StreetLamp" poles don't count.
+	kindMaxThickness = 0.5,
 	-- Kinds the drivability lint applies to (pairs are only compared within a kind).
 	drivableKinds = { "Road", "Rail" },
-	-- Parts with these names (case-insensitive) are ground surfaces.
+	-- Flat parts whose first name word is one of these are ground surfaces.
+	-- Prefer the BuildGuardGround tag or attribute.
 	groundNames = { "baseplate", "ground", "terrain" },
-	-- Parts with an X and Z footprint at least this big are also ground.
-	groundMinFootprint = 512,
+	-- Parts with an X and Z footprint at least this big also count as ground.
+	-- 0 = off (a big floor slab or roof isn't ground; tag real ground).
+	groundMinFootprint = 0,
 }
 
 -- Per-key rules. `scope = "global"` keys can't be set by attributes: tables,
@@ -111,6 +159,10 @@ Config.schema = {
 	zFightMinOverlapArea = { scope = "global", min = 0, max = 10 },
 	zFightNudge = { min = 0.002, max = 0.5 },
 	zFightIgnoreTransparency = { scope = "global", min = 0, max = 1 },
+	zFightViewDistance = { min = 0, max = 5000 },
+	meshTriangles = { scope = "global", type = "boolean" },
+	meshTriangleLimit = { scope = "global", min = 0, max = 1e6 },
+	meshOverlapRatio = { scope = "global", min = 0.5, max = 1 },
 	layerLift = { min = 0.002, max = 0.5 },
 	roadLift = { min = 0, max = 2 },
 	railLift = { min = 0, max = 2 },
@@ -131,12 +183,19 @@ Config.schema = {
 	maxSlopeChange = { min = 0, max = 90 },
 	maxRouteSlope = { min = 0, max = 90 },
 	minRoadWidth = { min = 0, max = 1000 },
+	edgeLedgeKinds = { scope = "global" },
+	edgeProbe = { min = 0.05, max = 4 },
+	collisionTolerance = { min = 0, max = 1 },
+	sweepSteps = { min = 2, max = 21 },
+	steerLock = { min = 0, max = 90 },
+	classifyByName = { scope = "global", type = "boolean" },
+	kindNameWords = { scope = "global" },
+	kindMaxThickness = { scope = "global", min = 0.01, max = 10 },
 	connectMargin = { min = 0, max = 5 },
 	connectMaxStep = { min = 0.1, max = 100 },
-	kindNamePatterns = { scope = "global" },
 	groundNames = { scope = "global" },
 	drivableKinds = { scope = "global" },
-	groundMinFootprint = { scope = "global", min = 1, max = 1e6 },
+	groundMinFootprint = { scope = "global", min = 0, max = 1e6 },
 }
 
 Config.ATTRIBUTE_PREFIX = "BuildGuard_"
@@ -152,7 +211,11 @@ function Config.check(key, value, fromAttribute)
 	if fromAttribute and spec.scope == "global" then
 		return false, ("%s can only be set in Config.lua or a call's options, not per model"):format(key)
 	end
-	if spec.min ~= nil then
+	if spec.type == "boolean" then
+		if type(value) ~= "boolean" then
+			return false, ("%s must be true or false, got %s"):format(key, tostring(value))
+		end
+	elseif spec.min ~= nil then
 		if type(value) ~= "number" or value ~= value then
 			return false, ("%s must be a number, got %s"):format(key, tostring(value))
 		end
@@ -210,19 +273,47 @@ function Config.ownOverrides(instance)
 	return overrides, errors
 end
 
+-- The instance holding place-wide settings: workspace in Studio, nil elsewhere.
+function Config.place()
+	if game then
+		return workspace
+	end
+	return nil
+end
+
 -- Resolves the effective config for any instance from `base` plus attributes
 -- on it and its ancestors. Caches per instance, so make a new one per scan.
+-- `place` (default Config.place()) holds place-wide settings: they apply
+-- under everything, including instances outside it.
 --   resolver.resolve(instance) -> config, sources (key -> instance that set it)
 --   resolver.errors            -> invalid attributes seen so far
 --   resolver.owners            -> instances seen carrying valid overrides
-function Config.resolver(base)
+function Config.resolver(base, place)
 	local cache = {}
 	local self = { errors = {}, owners = {} }
-	local emptySources = {}
+	local rootConfig, rootSources = base, {}
+	if place == nil then
+		place = Config.place()
+	end
+	if place then
+		local own = Config.ownOverrides(place)
+		if next(own) then
+			local merged = table.clone(base)
+			for key, value in own do
+				merged[key] = value
+				rootSources[key] = place
+			end
+			if checkNudge(merged) then
+				rootConfig = merged
+			else
+				rootSources = {}
+			end
+		end
+	end
 
 	function self.resolve(instance)
 		if instance == nil then
-			return base, emptySources
+			return rootConfig, rootSources
 		end
 		local hit = cache[instance]
 		if hit then
@@ -252,6 +343,26 @@ function Config.resolver(base)
 	end
 
 	return self
+end
+
+-- Smallest gap two same-facing faces need to not flicker for `config`:
+-- zFightNudge, or more when the model is seen from zFightViewDistance.
+-- Depth precision assumed is the worst case among Roblox's renderers: a
+-- 24-bit depth buffer with a 0.1-stud near plane (older Android/GLES
+-- phones; desktop and most iOS use a float reversed-Z buffer that is far
+-- finer). One depth step at distance d is d² / (0.1 × 2^24), and the gap
+-- needs two: 0.02 holds to about 130 studs, 0.05 to 205, 0.107 to 300.
+Config.NEAR_PLANE = 0.1
+Config.DEPTH_STEPS = 2 ^ 24
+function Config.depthStep(distance)
+	return distance * distance / (Config.NEAR_PLANE * Config.DEPTH_STEPS)
+end
+function Config.faceGap(config)
+	local distance = config.zFightViewDistance or 0
+	if distance <= 0 then
+		return config.zFightNudge
+	end
+	return math.max(config.zFightNudge, 2 * Config.depthStep(distance))
 end
 
 -- The smallest instance that contains both `a` and `b` (or nil).

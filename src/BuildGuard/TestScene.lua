@@ -81,20 +81,29 @@ function TestScene.build(parent, world, config, origin)
 	local roadY = config.roadLift + 0.5 -- centre of a 1-stud road resting on the ground
 	local roadTop = config.roadLift + 1
 	local railY = config.railLift + 0.25 -- centre of a 0.5-stud rail on the ground
+	-- A road piece on its own is measured across its shorter side, so lone
+	-- pieces are longer than they are wide.
+	local L = math.max(20, W + 4)
+	-- Rows run along X, one road width plus a margin apart.
+	local R = W + 14
+	local function snap8(n)
+		return math.ceil(n / 8) * 8
+	end
+	local groundHalfZ = 3 * R + W / 2 + 20
 
-	part("Ground", Vector3.new(240, 2, 240), CFrame.new(0, -1, 0), Color3.fromRGB(90, 140, 70), Enum.Material.Grass)
+	part("Ground", Vector3.new(420, 2, 2 * groundHalfZ), CFrame.new(0, -1, 0), Color3.fromRGB(90, 140, 70), Enum.Material.Grass)
 
 	-- Shop wall with a sign, a window and a correctly layered sign.
-	local wall = part("ShopWall", Vector3.new(20, 12, 1), CFrame.new(-60, 6, -60), Color3.fromRGB(150, 90, 70), Enum.Material.Brick)
+	local wall = part("ShopWall", Vector3.new(20, 12, 1), CFrame.new(-150, 6, -2 * R), Color3.fromRGB(150, 90, 70), Enum.Material.Brick)
 	plant(
-		part("ShopSign", Vector3.new(8, 2, 0.4), CFrame.new(-60, 9, -60.3), Color3.fromRGB(200, 40, 40)),
+		part("ShopSign", Vector3.new(8, 2, 0.4), CFrame.new(-150, 9, -2 * R - 0.3), Color3.fromRGB(200, 40, 40)),
 		"P1",
 		"zfight",
 		"fix",
 		"sign half-sunk into wall"
 	)
 	plant(
-		part("Window", Vector3.new(4, 4, 1), CFrame.new(-55, 5, -60), Color3.fromRGB(150, 200, 230), Enum.Material.Glass),
+		part("Window", Vector3.new(4, 4, 1), CFrame.new(-145, 5, -2 * R), Color3.fromRGB(150, 200, 230), Enum.Material.Glass),
 		"P3",
 		"zfight",
 		"fix",
@@ -114,54 +123,57 @@ function TestScene.build(parent, world, config, origin)
 	control(Layers.place(part("LaneMarking_Layered", Vector3.new(6, 0.1, 0.5), CFrame.new(), PAINT), main, { layer = 1, u = -10, config = config }))
 
 	-- Road cut through a terrain hill (hill sized to the road, on the 4-stud voxel grid).
-	plant(road("Road_HillCut", Vector3.new(20, 1, W), CFrame.new(-60, roadY, 40)), "P5", "buried", "fix", "under terrain hill")
-	local hill = { cframe = base * CFrame.new(-60, 4, 40), size = Vector3.new(24, 8, math.ceil((W + 8) / 8) * 8) }
+	plant(road("Road_HillCut", Vector3.new(L, 1, W), CFrame.new(-152, roadY, R)), "P5", "buried", "fix", "under terrain hill")
+	local hill = { cframe = base * CFrame.new(-152, 4, R), size = Vector3.new(snap8(L + 4), 8, snap8(W + 8)) }
 	world.fillTerrain(hill.cframe, hill.size, "Grass")
 
 	-- Rail with a crate dumped on it.
-	plant(part("Rail_Yard", Vector3.new(20, 0.5, 1), CFrame.new(40, railY, 40), Color3.fromRGB(110, 110, 120), Enum.Material.Metal), "P6", "buried", "flag", "crate on top")
-	part("Crate", Vector3.new(4, 4, 4), CFrame.new(40, 2, 40), Color3.fromRGB(160, 120, 70), Enum.Material.WoodPlanks)
+	plant(part("Rail_Yard", Vector3.new(20, 0.5, 1), CFrame.new(-40, railY, -R), Color3.fromRGB(110, 110, 120), Enum.Material.Metal), "P6", "buried", "flag", "crate on top")
+	part("Crate", Vector3.new(4, 4, 4), CFrame.new(-40, 2, -R), Color3.fromRGB(160, 120, 70), Enum.Material.WoodPlanks)
 
 	-- Road sunk into the ground slab, and one hovering above it.
-	plant(road("Road_Sunk", Vector3.new(20, 1, W), CFrame.new(60, -1, -40)), "P7", "buried", "fix", "sunk into ground")
-	local floating = road("Segment_Floating", Vector3.new(20, 1, W), CFrame.new(60, 3.5, 70))
+	plant(road("Road_Sunk", Vector3.new(L, 1, W), CFrame.new(60, -1, -R)), "P7", "buried", "fix", "sunk into ground")
+	local floating = road("Segment_Floating", Vector3.new(L, 1, W), CFrame.new(60, 3.5, 2 * R))
 	floating:SetAttribute("BuildGuardKind", "Road")
 	plant(floating, "P8", "offground", "fix", "hovering 3 studs up")
 
 	-- A road too narrow for a truck.
-	plant(road("Road_Narrow", Vector3.new(20, 1, W * 0.6), CFrame.new(60, roadY, 105)), "P12", "roadwidth", "flag", ("%.1f studs wide"):format(W * 0.6))
+	plant(road("Road_Narrow", Vector3.new(L, 1, W * 0.6), CFrame.new(150, roadY, 2 * R)), "P12", "roadwidth", "flag", ("%.1f studs wide"):format(W * 0.6))
 
 	-- Drivability: a ledge and a steep slope off Road_A.
 	local ledge = math.min(config.maxLedge * 3, (config.maxLedge + config.connectMaxStep) / 2)
 	local steep = math.min(math.max(config.maxSlopeChange, config.maxRouteSlope) + 25, 75)
-	road("Road_A", Vector3.new(20, 1, W), CFrame.new(0, roadY, -85))
-	part("Plinth", Vector3.new(20, ledge, W), CFrame.new(20, ledge / 2, -85), Color3.fromRGB(170, 170, 160), Enum.Material.Concrete)
-	plant(road("Road_B_Raised", Vector3.new(20, 1, W), CFrame.new(20, ledge + roadY, -85)), "P9", "ledge", "flag", ("%.2f stud step"):format(ledge))
-	local steepRoad = road("Road_C_Steep", Vector3.new(16, 1, W), CFrame.new(-10, roadTop, -85) * CFrame.Angles(0, 0, -math.rad(steep)) * CFrame.new(-8, -0.5, 0))
+	local zA = -2 * R
+	road("Road_A", Vector3.new(20, 1, W), CFrame.new(0, roadY, zA))
+	part("Plinth", Vector3.new(20, ledge, W), CFrame.new(20, ledge / 2, zA), Color3.fromRGB(170, 170, 160), Enum.Material.Concrete)
+	plant(road("Road_B_Raised", Vector3.new(20, 1, W), CFrame.new(20, ledge + roadY, zA)), "P9", "ledge", "flag", ("%.2f stud step"):format(ledge))
+	local steepRoad = road("Road_C_Steep", Vector3.new(16, 1, W), CFrame.new(-10, roadTop, zA) * CFrame.Angles(0, 0, -math.rad(steep)) * CFrame.new(-8, -0.5, 0))
 	plant(steepRoad, "P10", "slope", "flag", ("%.0f° join"):format(steep))
 	table.insert(planted, { id = "P11", part = steepRoad, check = "routeslope", expect = "flag", note = ("%.0f° route"):format(steep) })
 
 	-- Controls: a gentle ramp, a correctly built road, rail and track.
 	local gentle = math.min(config.maxSlopeChange, config.maxRouteSlope) / 2
-	control(road("Road_E", Vector3.new(20, 1, W), CFrame.new(60, roadY, -85)))
-	control(road("Road_F_Gentle", Vector3.new(16, 1, W), CFrame.new(70, roadTop, -85) * CFrame.Angles(0, 0, math.rad(gentle)) * CFrame.new(8, -0.5, 0)))
-	local good = control(road("Road_Good", Vector3.new(30, 1, W), CFrame.new(0, roadY, 80)))
+	control(road("Road_E", Vector3.new(20, 1, W), CFrame.new(70, roadY, zA)))
+	control(road("Road_F_Gentle", Vector3.new(16, 1, W), CFrame.new(80, roadTop, zA) * CFrame.Angles(0, 0, math.rad(gentle)) * CFrame.new(8, -0.5, 0)))
+	local good = control(road("Road_Good", Vector3.new(math.max(30, W + 4), 1, W), CFrame.new(0, roadY, R)))
 	control(Layers.place(part("StopLine", Vector3.new(0.6, 0.1, 10), CFrame.new(), PAINT), good, { layer = 1, u = 10, config = config }))
 	control(Layers.place(part("Arrow", Vector3.new(3, 0.1, 0.6), CFrame.new(), PAINT), good, { layer = 2, u = 10, config = config }))
-	control(part("Rail_Good", Vector3.new(20, 0.5, 1), CFrame.new(-40, railY, 80), Color3.fromRGB(110, 110, 120), Enum.Material.Metal))
+	control(part("Rail_Good", Vector3.new(20, 0.5, 1), CFrame.new(-60, railY, R), Color3.fromRGB(110, 110, 120), Enum.Material.Metal))
 	local bedTop = config.trackLift + 0.5
-	control(part("TrackBed_Good", Vector3.new(24, 0.5, 4), CFrame.new(-40, config.trackLift + 0.25, 105), Color3.fromRGB(120, 105, 90), Enum.Material.Slate))
+	control(part("TrackBed_Good", Vector3.new(24, 0.5, 4), CFrame.new(-60, config.trackLift + 0.25, 2 * R), Color3.fromRGB(120, 105, 90), Enum.Material.Slate))
 	for _, z in { -0.7, 0.7 } do
-		control(part("Rail_OnBed", Vector3.new(23, 0.3, 0.3), CFrame.new(-40, bedTop + config.railLift + 0.15, 105 + z), Color3.fromRGB(110, 110, 120), Enum.Material.Metal))
+		control(part("Rail_OnBed", Vector3.new(23, 0.3, 0.3), CFrame.new(-60, bedTop + config.railLift + 0.15, 2 * R + z), Color3.fromRGB(110, 110, 120), Enum.Material.Metal))
 	end
 
 	-- Mine tunnel: terrain walls and an 8-stud rock roof (thinner than
-	-- snapSearchUp) over a 24-wide, 12-high tunnel. A road hovers inside it;
-	-- a rail inside is built correctly.
+	-- snapSearchUp) over a tunnel 12 high and W + 12 (rounded to the voxel
+	-- grid) wide. A road hovers inside it; a rail inside is built correctly.
+	local tunnelLength, tunnelWidth = snap8(L + 8), snap8(W + 12)
+	local tx = 152
 	local tunnelBlocks = {
-		{ cframe = base * CFrame.new(102, 16, 0), size = Vector3.new(28, 8, 48) }, -- roof, y 12..20
-		{ cframe = base * CFrame.new(102, 6, -18), size = Vector3.new(28, 12, 12) }, -- wall, z -24..-12
-		{ cframe = base * CFrame.new(102, 6, 18), size = Vector3.new(28, 12, 12) }, -- wall, z 12..24
+		{ cframe = base * CFrame.new(tx, 16, 0), size = Vector3.new(tunnelLength, 8, tunnelWidth + 24) }, -- roof, y 12..20
+		{ cframe = base * CFrame.new(tx, 6, -(tunnelWidth / 2 + 6)), size = Vector3.new(tunnelLength, 12, 12) }, -- wall
+		{ cframe = base * CFrame.new(tx, 6, tunnelWidth / 2 + 6), size = Vector3.new(tunnelLength, 12, 12) }, -- wall
 	}
 	for _, block in tunnelBlocks do
 		world.fillTerrain(block.cframe, block.size, "Rock")
@@ -171,28 +183,29 @@ function TestScene.build(parent, world, config, origin)
 	mine:SetAttribute("BuildGuard_roadHeadroom", 14)
 	mine:SetAttribute("BuildGuardConfigReason", "haul truck is 13 studs tall")
 	mine.Parent = folder
-	local tunnelRoad = road("Road_Tunnel", Vector3.new(20, 1, W), CFrame.new(102, 1.1, -2))
+	local tunnelRoad = road("Road_Tunnel", Vector3.new(L, 1, W), CFrame.new(tx, 1.1, -2))
 	tunnelRoad.Parent = mine
 	plant(tunnelRoad, "P13", "offground", "fix", "hovering 0.5 in a tunnel under a thin roof")
 	planted[#planted].expectBottomY = origin.Y + config.roadLift
 	table.insert(planted, { id = "P14", part = tunnelRoad, check = "headroom", expect = "flag", note = "roof 12 up, needs 14" })
-	control(part("Rail_Tunnel", Vector3.new(20, 0.5, 1), CFrame.new(102, railY, 9), Color3.fromRGB(110, 110, 120), Enum.Material.Metal)).Parent = mine
+	control(part("Rail_Tunnel", Vector3.new(20, 0.5, 1), CFrame.new(tx, railY, W / 2 + 4), Color3.fromRGB(110, 110, 120), Enum.Material.Metal)).Parent = mine
 
 	-- Haul truck with a strut welded flush against the chassis side.
 	local truck = Instance.new("Model")
 	truck.Name = "HaulTruck"
 	truck.Parent = folder
-	local chassis = part("Chassis", Vector3.new(8, 2, 16), CFrame.new(-100, 2, 0), Color3.fromRGB(230, 170, 30), Enum.Material.Metal)
+	local tx2 = -150
+	local chassis = part("Chassis", Vector3.new(8, 2, 16), CFrame.new(tx2, 2, 0), Color3.fromRGB(230, 170, 30), Enum.Material.Metal)
 	chassis.Parent = truck
-	part("Cab", Vector3.new(8, 6, 5), CFrame.new(-100, 6, -5), Color3.fromRGB(230, 170, 30), Enum.Material.Metal).Parent = truck
+	part("Cab", Vector3.new(8, 6, 5), CFrame.new(tx2, 6, -5), Color3.fromRGB(230, 170, 30), Enum.Material.Metal).Parent = truck
 	for _, x in { -4.5, 4.5 } do
 		for _, z in { -6, 6 } do
-			local wheel = part("Wheel", Vector3.new(1, 3, 3), CFrame.new(-100 + x, 1.5, z), Color3.fromRGB(30, 30, 30))
+			local wheel = part("Wheel", Vector3.new(1, 3, 3), CFrame.new(tx2 + x, 1.5, z), Color3.fromRGB(30, 30, 30))
 			wheel.Shape = Enum.PartType.Cylinder
 			wheel.Parent = truck
 		end
 	end
-	local strut = part("Strut_FL", Vector3.new(1, 2, 1), CFrame.new(-100 + 3.5, 1.5, -3), Color3.fromRGB(120, 120, 130), Enum.Material.Metal)
+	local strut = part("Strut_FL", Vector3.new(1, 2, 1), CFrame.new(tx2 + 3.5, 1.5, -3), Color3.fromRGB(120, 120, 130), Enum.Material.Metal)
 	strut.Parent = truck
 	local weld = Instance.new("Weld")
 	weld.Name = "StrutWeld"
@@ -210,8 +223,9 @@ function TestScene.build(parent, world, config, origin)
 	pass:SetAttribute("BuildGuard_maxRouteSlope", steep + 10)
 	pass:SetAttribute("BuildGuardConfigReason", "switchback mountain road")
 	pass.Parent = folder
-	control(road("Road_M1", Vector3.new(20, 1, W), CFrame.new(-60, roadY, -110))).Parent = pass
-	control(road("Road_M2_Steep", Vector3.new(16, 1, W), CFrame.new(-50, roadTop, -110) * CFrame.Angles(0, 0, math.rad(steep)) * CFrame.new(8, -0.5, 0))).Parent = pass
+	local zM = -3 * R
+	control(road("Road_M1", Vector3.new(20, 1, W), CFrame.new(-60, roadY, zM))).Parent = pass
+	control(road("Road_M2_Steep", Vector3.new(16, 1, W), CFrame.new(-50, roadTop, zM) * CFrame.Angles(0, 0, math.rad(steep)) * CFrame.new(8, -0.5, 0))).Parent = pass
 
 	folder.Parent = parent
 	local terrain = { hill }

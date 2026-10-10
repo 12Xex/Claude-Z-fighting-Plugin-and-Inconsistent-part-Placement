@@ -37,6 +37,8 @@ local baseEnv = {
 	getmetatable = getmetatable,
 	rawget = rawget,
 	rawequal = rawequal,
+	coroutine = coroutine,
+	os = { clock = os.clock, date = os.date, time = os.time },
 }
 
 local nodes, cache = {}, {}
@@ -77,6 +79,11 @@ end
 -- The BuildGuard module (src/BuildGuard/init.lua).
 function Harness.load()
 	return requireShim(node("src/BuildGuard"))
+end
+
+-- One of its modules, e.g. Harness.module("Checks/ZFight").
+function Harness.module(path)
+	return requireShim(node("src/BuildGuard/" .. path))
 end
 
 return Harness

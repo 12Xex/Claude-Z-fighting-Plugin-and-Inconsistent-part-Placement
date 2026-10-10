@@ -94,6 +94,32 @@ function FakeWorld.new(root, Geometry)
 		table.insert(blocks, Geometry.solidFrom(cframe, size, "Block"))
 	end
 
+	-- Mesh triangles: tests register them per part, in the part's local space
+	-- (studs, already fitted to its Size). Studio reads them from EditableMesh.
+	local meshes = {}
+	function self.setMeshTriangles(part, triangles)
+		meshes[part] = triangles
+	end
+	function self.meshTriangles(part)
+		local triangles = meshes[part]
+		if not triangles then
+			return nil, "mesh not loadable"
+		end
+		return triangles
+	end
+
+	-- Collision groups: everything collides unless a test says otherwise.
+	self.nonColliding = {}
+	function self.groupsCollide(a, b)
+		return not (self.nonColliding[a .. "|" .. b] or self.nonColliding[b .. "|" .. a])
+	end
+
+	-- Scans call this between chunks of work; tests count the calls.
+	self.yields = 0
+	function self.yield()
+		self.yields += 1
+	end
+
 	function self.clearTerrain(cframe)
 		for i = #blocks, 1, -1 do
 			if (blocks[i].pos - cframe.Position).Magnitude < 1e-3 then

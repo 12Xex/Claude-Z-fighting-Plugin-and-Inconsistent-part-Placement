@@ -2,12 +2,22 @@
 	Uniform grid over axis-aligned boxes, so pair checks only compare parts that
 	are near each other. Items covering too many cells (baseplates) go into a
 	"big" list that every query returns.
+
+	Cells are keyed by one number (each cell index wrapped to 16 bits), not a
+	string, so big maps don't build a string per cell. Cells 65536 apart share
+	a key; that only adds candidates, and callers test real overlap anyway.
 ]]
 
 local SpatialHash = {}
 SpatialHash.__index = SpatialHash
 
 local MAX_CELLS_PER_ITEM = 4096
+local WRAP = 65536
+
+local function key(x, y, z)
+	return ((x % WRAP) * WRAP + (y % WRAP)) * WRAP + (z % WRAP)
+end
+SpatialHash.key = key
 
 function SpatialHash.new(cellSize)
 	return setmetatable({ cellSize = cellSize or 8, cells = {}, big = {} }, SpatialHash)
@@ -32,11 +42,11 @@ function SpatialHash:insert(item, min, max)
 	for x = x0, x1 do
 		for y = y0, y1 do
 			for z = z0, z1 do
-				local key = x .. "," .. y .. "," .. z
-				local list = self.cells[key]
+				local k = key(x, y, z)
+				local list = self.cells[k]
 				if not list then
 					list = {}
-					self.cells[key] = list
+					self.cells[k] = list
 				end
 				table.insert(list, item)
 			end
@@ -67,7 +77,7 @@ function SpatialHash:query(min, max)
 	for x = x0, x1 do
 		for y = y0, y1 do
 			for z = z0, z1 do
-				local list = self.cells[x .. "," .. y .. "," .. z]
+				local list = self.cells[key(x, y, z)]
 				if list then
 					for _, item in list do
 						if not seen[item] then
