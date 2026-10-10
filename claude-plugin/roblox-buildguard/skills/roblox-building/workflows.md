@@ -176,6 +176,7 @@ After each model, tell the user:
 | `plan is stale, ... changed since it was made` | Something moved after the scan. Run `BG.check` again and re-plan (or run `fixAll` again). |
 | `config ... attribute ... ignored` | A `BuildGuard_` attribute is wrong. Fix it with `BG.setConfig`, or remove it with `BG.clearConfig`. |
 | `... both parts are locked (or ground): move one by hand, or unlock one` | Neither part may be moved by a fix. Move one yourself (or, with the user's OK, clear its `BuildGuardLocked`). |
+| `... it's locked (Locked or BuildGuardLocked) ...` on a road | A locked road isn't snapped. Ask the user before unlocking it or moving it yourself. |
 | Snap skipped: `no ground below` | Nothing under the part. Build the ground or supports first. |
 | Snap skipped: `buried deeper than 20 studs` | Carve the space for it, or move it up yourself. |
 | Snap skipped: `tilted …, treated as a ramp` | Expected for ramps. Place them by their joints (Roads step 3). |

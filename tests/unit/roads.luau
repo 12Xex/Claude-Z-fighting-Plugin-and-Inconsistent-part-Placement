@@ -302,6 +302,31 @@ test("every road check names parts by path and gives a position", function()
 	located(find("edge", thick), true)
 end)
 
+T.section("Roads: locked pieces")
+
+test("snaps never move a locked road: reported, not fixed; an unlocked twin is", function()
+	local root, world, part = setup()
+	local hover = part("Road_Hover", Vector3.new(30, 0.8, W), CFrame.new(0, 3, 0))
+	hover.Locked = true
+	local sunk = part("Road_Sunk", Vector3.new(30, 0.8, W), CFrame.new(60, -0.2, 0))
+	sunk:SetAttribute("BuildGuardLocked", true)
+	local twin = part("Road_Twin", Vector3.new(30, 0.8, W), CFrame.new(-60, 3, 0))
+	local before = { hover.CFrame, sunk.CFrame }
+	local report = BG.scan(root, { world = world })
+	for _, issue in report.issues do
+		if issue.parts[1] == hover or issue.parts[1] == sunk then
+			expect(not BG.isFixable(issue), "locked piece fixable: " .. issue.message)
+			expect(string.find(issue.message, "locked", 1, true), issue.message)
+		end
+	end
+	BG.fixAll(root, { world = world })
+	expect(hover.CFrame == before[1] and sunk.CFrame == before[2], "a locked road moved")
+	expect(math.abs(twin.CFrame.Position.Y - (D.roadLift + 0.4)) < 1e-3, "the unlocked twin is snapped")
+	local plan, skipped = BG.planSnap({ hover, twin }, { world = world })
+	expect(#plan.items == 0, "twin already snapped, locked one skipped")
+	expect(#skipped == 1 and skipped[1].part == hover and string.find(skipped[1].reason, "locked", 1, true))
+end)
+
 T.section("Roads: ignored things")
 
 test("an ignored crate (tag) on a road isn't cover; an untagged one is", function()

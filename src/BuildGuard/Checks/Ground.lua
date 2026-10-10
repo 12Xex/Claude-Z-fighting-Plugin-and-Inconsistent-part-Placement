@@ -201,6 +201,12 @@ function Ground.measure(s, ctx)
 	return { delta = best }
 end
 
+-- Locked parts (Locked, BuildGuardLocked) are never moved by a snap.
+Ground.LOCKED_NOTE = "it's locked (Locked or BuildGuardLocked): unlock it to let the fix move it, or move it by hand"
+function Ground.isLocked(s, ctx)
+	return Classify.isLocked(s.part, ctx.configFor(s.part))
+end
+
 -- Plan items that move `s` (and its riders) by `delta` studs vertically.
 function Ground.items(s, ctx, delta, check, reason)
 	local offset = Vector3.new(0, delta, 0)
@@ -215,7 +221,7 @@ end
 function Ground.planSnap(solids, ctx, plan)
 	local skipped = {}
 	for _, s in solids do
-		local m = Ground.measure(s, ctx)
+		local m = if Ground.isLocked(s, ctx) then { skip = "locked (Locked or BuildGuardLocked), so it stays where it is" } else Ground.measure(s, ctx)
 		if m.delta then
 			if math.abs(m.delta) > 1e-4 then
 				local reason = ("snap to ground (%+.3f)"):format(m.delta)
@@ -238,14 +244,15 @@ local function offGroundIssue(s, kind, ctx)
 		local what = if m.delta < 0
 			then ("hovers %.2f studs above the ground"):format(-m.delta)
 			else ("is sunk %.2f studs into the ground"):format(m.delta)
+		local locked = Ground.isLocked(s, ctx)
 		return {
 			check = "offground",
 			severity = "warning",
 			parts = { s.part },
 			position = bottom,
 			value = m.delta,
-			message = ("%s %s %s"):format(kind, ctx.path(s.part), what),
-			fixItems = Ground.items(s, ctx, m.delta, "offground", ("snap to ground (%+.3f)"):format(m.delta)),
+			message = ("%s %s %s%s"):format(kind, ctx.path(s.part), what, if locked then " — " .. Ground.LOCKED_NOTE else ""),
+			fixItems = if locked then nil else Ground.items(s, ctx, m.delta, "offground", ("snap to ground (%+.3f)"):format(m.delta)),
 		}
 	elseif m.skip == "no ground below" then
 		return {

@@ -141,13 +141,16 @@ local function buriedIssue(s, kind, samples, covered, covers, position, ctx)
 			#samples
 		),
 	}
-	if allGround then
+	local locked = allGround and Ground.isLocked(s, ctx)
+	if allGround and not locked then
 		local m = Ground.measure(s, ctx)
 		if m.delta and m.delta > 0 then
 			issue.fixItems = Ground.items(s, ctx, m.delta, "buried", ("lift onto ground (%+.3f)"):format(m.delta))
 		end
 	end
-	if not issue.fixItems then
+	if locked then
+		issue.message ..= " — " .. Ground.LOCKED_NOTE
+	elseif not issue.fixItems then
 		issue.message ..= " — move the cover or the " .. string.lower(kind) .. " by hand"
 	end
 	return issue

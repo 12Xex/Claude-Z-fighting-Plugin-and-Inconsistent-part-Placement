@@ -100,7 +100,7 @@ Messages name parts by their path from the scanned model, with `#n` on the nth o
 - **Vehicles** are built separately (in Blender). Keep them out of the models you check and fix, or tag them `BuildGuardIgnore`: z-fight fixes don't skip them. BuildGuard still recognises vehicle parts (everything joined to a VehicleSeat or to two or more spinning wheels, and every part of a model holding a VehicleSeat or marked `BuildGuardVehicle`): they never count as roads by name, cover, ground or a ceiling, and snapping never moves them.
 - **Layered items:** anything placed with `Layers.place` (it sets `BuildGuardLayer`). These never count as roads by name, as covering a road or as a ceiling, and they move with the road when it's snapped.
 - **Meshes and unions** count as solid (for the buried and snap tests) by their collision shape in Studio (their CollisionFidelity), not by their box.
-- **Never moved by z-fight fixes:** ground parts, `Locked` parts, and parts with `BuildGuardLocked = true`. A z-fight between two such parts is reported as not auto-fixable: move or unlock one. (Snapping a road, rail or track to the ground doesn't look at these.)
+- **Never moved by fixes:** ground parts, `Locked` parts, and parts with `BuildGuardLocked = true`. A z-fight between two such parts, or a locked road that's buried or off the ground, is reported as not auto-fixable: move or unlock it. `planSnap` skips locked parts and says so.
 - **Skipped entirely:** anything at or under an instance with the `BuildGuardIgnore` attribute or tag. It also never counts as cover, ground or a ceiling.
 
 ## How the fixes decide

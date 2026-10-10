@@ -109,7 +109,7 @@ Global settings (call options or `Config.lua` only): `classifyByName` (true), `k
 | `BuildGuardKind` = `"Road"` / `"Rail"` / `"Track"` / `"None"` (on the part) | Sets or clears the kind (overrides tags and the name) |
 | tag `Road` / `Rail` / `Track` (on the part) | Sets the kind |
 | `BuildGuardGround` (attribute true/false or tag) | It and everything under it count as ground (or, with false, don't); the nearest one wins |
-| `BuildGuardLocked = true` (on the part) | Z-fight fixes never move it (also true for `Locked` parts and ground; snapping roads, rails and tracks doesn't look at it). A z-fight between two such parts isn't auto-fixable. |
+| `BuildGuardLocked = true` (on the part) | Fixes never move it (also true for `Locked` parts and ground). A z-fight between two such parts, or a locked road that's buried or off the ground, isn't auto-fixable; `planSnap` skips it. |
 | `BuildGuardIgnore` (attribute true or tag) | It and its descendants are skipped, never snapped, and never count as cover, ground or a ceiling |
 | `BuildGuardLayer` | Set by `Layers.place`. Marks layered items: never roads by name, cover or ceilings; they ride along when the part under them is snapped. |
 | `BuildGuardWheel` (attribute true/false or tag) | Marks (or unmarks) a part as a wheel for `checkVehicle` |
