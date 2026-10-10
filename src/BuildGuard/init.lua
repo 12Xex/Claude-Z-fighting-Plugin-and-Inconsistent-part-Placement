@@ -267,7 +267,7 @@ function BuildGuard.scan(root, options)
 		counts = counts,
 		root = root,
 		roots = ctx.roots,
-		overrides = BuildGuard.describeOverrides(ctx.resolver.owners),
+		overrides = BuildGuard.describeOverrides(ctx.resolver.owners, ctx.path),
 		timings = timings,
 		seconds = Util.clock() - started,
 		coverage = ctx.coverage,
@@ -581,7 +581,7 @@ function BuildGuard.explainConfig(instance, options)
 end
 
 -- { instance, overrides, reason, text } for each instance carrying overrides.
-function BuildGuard.describeOverrides(instances)
+function BuildGuard.describeOverrides(instances, pathOf)
 	local out = {}
 	for _, instance in instances do
 		local overrides = Config.ownOverrides(instance)
@@ -600,7 +600,7 @@ function BuildGuard.describeOverrides(instances)
 			overrides = overrides,
 			reason = reason,
 			text = ("%s: %s%s"):format(
-				instance:GetFullName(),
+				if pathOf then pathOf(instance) else instance:GetFullName(),
 				table.concat(parts, ", "),
 				if reason then (" — %q"):format(reason) else " — no reason given"
 			),

@@ -286,6 +286,20 @@ test("duplicates: same mesh or block, pose and size; each copy reported once, ne
 	expectPositions(report)
 end)
 
+test("copies that look different are a z-fight to fix, not a duplicate", function()
+	local root, world, part = setup()
+	local globe = shaped(part("Globe", Vector3.new(2, 2, 2), CFrame.new(0, 3, 0)), "Ball")
+	globe.Material, globe.Transparency = Enum.Material.Glass, 0.5
+	local bulb = shaped(part("Bulb", Vector3.new(2, 2, 2), CFrame.new(0, 3, 0)), "Ball")
+	bulb.Material = Enum.Material.Neon
+	local report = BG.scan(root, { world = world })
+	expect(#checks(report, "duplicate") == 0, BG.format(report))
+	local z = checks(report, "zfight")
+	expect(#z == 1 and BG.isFixable(z[1]), BG.format(report))
+	BG.apply(BG.planFixes(report))
+	expect(#checks(BG.scan(root, { world = world }), "zfight") == 0, "fixed")
+end)
+
 test("mesh boxes: different meshes in one place, or nearly coincident copies, are box overlaps", function()
 	local root, world = setup()
 	local pose = CFrame.new(0, 3, 0)

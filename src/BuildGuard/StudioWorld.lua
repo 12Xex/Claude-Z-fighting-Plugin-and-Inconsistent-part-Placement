@@ -19,6 +19,9 @@
 	      Read through EditableMesh, so only meshes the place owner or you can
 	      load. Loading a mesh yields; each mesh is loaded once per session.
 	      `note` is set when the mesh data isn't centred on its bounds.
+	  setMeshTriangles(part, triangles)   gives a part triangles by hand (the
+	      test scene's planted mesh, which has no mesh of its own); they win
+	      over the part's mesh for this world
 	  groupsCollide(groupA, groupB) -> boolean   (collision group names)
 	  yield()   waits a frame once about 30 ms of work have passed since the
 	            last wait (does nothing where the caller can't yield)
@@ -452,7 +455,17 @@ function StudioWorld.new(worldRoot)
 		return Util.hasTag(instance, tag)
 	end
 
-	self.meshTriangles = meshTriangles
+	local given = setmetatable({}, { __mode = "k" })
+	function self.setMeshTriangles(part, triangles)
+		given[part] = triangles
+	end
+	function self.meshTriangles(part)
+		local triangles = given[part]
+		if triangles then
+			return triangles
+		end
+		return meshTriangles(part)
+	end
 
 	-- Answers are kept for this world (one scan), since a scan asks about
 	-- the same few groups over and over.

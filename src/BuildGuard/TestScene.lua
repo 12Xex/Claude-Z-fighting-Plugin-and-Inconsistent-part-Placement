@@ -29,6 +29,10 @@
 	  P16 Road_Thick         edge       flag  road so thick that the step from the ground up
 	                                          onto it is above maxLedge
 
+	P17 to P26 (meshes, round parts, corner wedges, far view, repeated names
+	and names that aren't roads) are built by TestCases.lua and listed
+	there.
+
 	Every size and height comes from the config (road width, lifts, limits),
 	so the scene plants real violations and real non-violations whatever
 	numbers are set. Roads are thin enough that the step from the ground up
@@ -42,6 +46,7 @@
 ]]
 
 local Layers = require(script.Parent.Layers)
+local TestCases = require(script.Parent.TestCases)
 
 local TestScene = {}
 
@@ -55,9 +60,14 @@ function TestScene.build(parent, world, config, origin)
 	folder.Name = "BuildGuardTestScene"
 	local planted, controls = {}, {}
 
-	local function part(name, size, cframe, color, material)
-		local p = Instance.new("Part")
+	-- `class` is the part's class (Part by default), `shape` a PartType
+	-- name for a Part ("Cylinder", "Ball").
+	local function part(name, size, cframe, color, material, class, shape)
+		local p = Instance.new(class or "Part")
 		p.Name = name
+		if shape then
+			p.Shape = Enum.PartType[shape]
+		end
 		p.Size = size
 		p.CFrame = base * cframe
 		p.Anchored = true
@@ -265,6 +275,25 @@ function TestScene.build(parent, world, config, origin)
 		"flag",
 		("%.2f-stud step up from the ground"):format(thick + config.roadLift)
 	)
+
+	-- The v0.6 cases (TestCases.lua).
+	local builder = {
+		part = part,
+		plant = plant,
+		control = control,
+		model = function(name, parentInstance)
+			local m = Instance.new("Model")
+			m.Name = name
+			m.Parent = parentInstance or folder
+			return m
+		end,
+		world = world,
+		config = config,
+		base = base,
+		W = W,
+	}
+	TestCases.faces(builder, CFrame.new(-60, 0, 3 * R))
+	TestCases.names(builder, good)
 
 	folder.Parent = parent
 	local terrain = { hill }

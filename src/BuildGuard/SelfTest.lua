@@ -12,6 +12,8 @@
 
 local TestScene = require(script.Parent.TestScene)
 local Config = require(script.Parent.Config)
+local Util = require(script.Parent.Util)
+local Classify = require(script.Parent.Classify)
 
 local SelfTest = {}
 
@@ -157,6 +159,9 @@ function SelfTest.run(BuildGuard, options)
 	local controlsOk, movedControl = sameAs(controlState)
 	row(controlsOk, "controls   no control part moved" .. (if movedControl then " (" .. movedControl.Name .. " moved)" else ""))
 
+	-- 4. Paths, positions, timings, fix report, names.
+	SelfTest.extraRows(BuildGuard, scene, before, result, original, config, row)
+
 	local lines = {
 		("BuildGuard self-test: %s (%d check(s), %d failure(s), %d fix pass(es))"):format(
 			if failures == 0 then "PASS" else "FAIL",
@@ -173,6 +178,99 @@ function SelfTest.run(BuildGuard, options)
 		TestScene.destroy(scene, world)
 	end
 	return { passed = failures == 0, text = table.concat(lines, "\n"), rows = rows, scene = scene }
+end
+
+local function plantedById(scene, id)
+	for _, p in scene.planted do
+		if p.id == id then
+			return p
+		end
+	end
+	return nil
+end
+
+function SelfTest.extraRows(BuildGuard, scene, before, result, original, config, row)
+	local root = scene.folder
+
+	-- Repeated names are told apart by path, and every issue says where.
+	local p26 = plantedById(scene, "P26")
+	if p26 then
+		local expected = Util.path(p26.part, root)
+		local found = nil
+		for _, issue in before.issues do
+			if issue.check == "zfight" and table.find(issue.parts, p26.part) then
+				found = issue
+			end
+		end
+		row(
+			found ~= nil and table.find(found.paths or {}, expected) ~= nil and found.position ~= nil,
+			("paths      %s is named by its path and position in its z-fight"):format(expected)
+		)
+	end
+	local missing = 0
+	for _, issue in before.issues do
+		if issue.check ~= "config" and issue.position == nil then
+			missing += 1
+		end
+	end
+	row(missing == 0, ("positions  every issue says where it is (%d without)"):format(missing))
+
+	-- Each check is timed.
+	local timed = {}
+	for _, t in before.timings or {} do
+		timed[t.name] = true
+	end
+	local untimed = {}
+	for _, check in BuildGuard.CHECKS do
+		if not timed[check.name] then
+			table.insert(untimed, check.name)
+		end
+	end
+	row(timed.collect and #untimed == 0, "timings    the report times every check" .. (if #untimed > 0 then " (missing " .. table.concat(untimed, ", ") .. ")" else ""))
+
+	-- The fix report gives each changed part's exact move.
+	local changes = result.changes or {}
+	local wrong = nil
+	for _, change in changes do
+		local start = original[change.part]
+		if not start or (start[1].Position + change.move - change.part.CFrame.Position).Magnitude > 1e-3 then
+			wrong = change.path
+		end
+	end
+	row(#changes > 0 and wrong == nil, ("fixreport  %d changed part(s), each with the move that took it where it is%s"):format(
+		#changes,
+		if wrong then " (wrong for " .. wrong .. ")" else ""
+	))
+
+	-- Names and sizes that used to fool the checks.
+	local fooled = {}
+	local function probe(name, size, className)
+		local p = Instance.new(className or "Part")
+		p.Name = name
+		p.Size = size
+		return p
+	end
+	for _, case in {
+		{ "StreetLamp", Vector3.new(1, 12, 1) },
+		{ "RoadSign", Vector3.new(6, 4, 0.2) },
+		{ "BedRail", Vector3.new(0.3, 0.3, 8) },
+		{ "RoofRail", Vector3.new(8, 0.3, 0.3) },
+		{ "Railing", Vector3.new(8, 3, 0.3) },
+	} do
+		if Classify.kind(probe(case[1], case[2]), config) ~= nil then
+			table.insert(fooled, case[1])
+		end
+	end
+	local slab = probe("FloorSlab", Vector3.new(600, 1, 600))
+	if Classify.isGroundLike(slab, config) then
+		table.insert(fooled, "FloorSlab as ground")
+	end
+	for _, name in { "SteeringWheel", "SpareWheel", "WheelArch_FL" } do
+		if Classify.isWheelName(name) then
+			table.insert(fooled, name .. " as a wheel")
+		end
+	end
+	row(#fooled == 0, "names      lamps, signs, bed/roof rails, railings, big slabs and steering/spare wheels aren't misread" .. (if #fooled > 0 then " (" .. table.concat(fooled, ", ") .. ")" else ""))
 end
 
 return SelfTest

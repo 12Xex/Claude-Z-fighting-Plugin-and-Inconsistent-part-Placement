@@ -161,8 +161,19 @@ function Meshes.identity(part)
 	return ""
 end
 
--- Are solids `a` and `b` copies: same class and mesh/shape, position and
--- size within `tolerance`, and the same rotation (within 0.1 degree)?
+-- Do two parts look the same (colour, material, transparency, texture)?
+-- Copies that look different are two things built in one place (a glass
+-- globe over a bulb), so they're z-fights to fix, not copies to delete.
+local function sameLook(a, b)
+	return a.Color == b.Color
+		and a.Material == b.Material
+		and math.abs(a.Transparency - b.Transparency) < 1e-3
+		and Util.prop(a, "TextureID", "") == Util.prop(b, "TextureID", "")
+end
+
+-- Are solids `a` and `b` copies: same class and mesh/shape, the same look,
+-- position and size within `tolerance`, and the same rotation (within 0.1
+-- degree)?
 function Meshes.isDuplicate(a, b, tolerance)
 	if a.part.ClassName ~= b.part.ClassName or (a.pos - b.pos).Magnitude > tolerance then
 		return false
@@ -176,7 +187,7 @@ function Meshes.isDuplicate(a, b, tolerance)
 			return false
 		end
 	end
-	return Meshes.identity(a.part) == Meshes.identity(b.part)
+	return Meshes.identity(a.part) == Meshes.identity(b.part) and sameLook(a.part, b.part)
 end
 
 -- How much of their volume two boxes share (intersection over union), when
