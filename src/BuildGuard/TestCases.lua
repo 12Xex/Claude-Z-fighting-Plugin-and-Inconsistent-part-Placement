@@ -16,12 +16,16 @@
 	  P26 TubTop#3           zfight      fix   one of three same-named parts (found by path)
 
 	Controls added here: a wider sleeve, a corner wedge resting on a block,
-	the same 0.02 gap seen up close, a StreetLamp, a RoadSign and a RoofRail
-	by the road, an ignored (tagged) crate on the main road.
+	the same 0.02 gap seen up close, a StreetLamp, two RoadSigns and a
+	RoofRail by the road, a Highway_Exit sign on a post, a RoadSign placed
+	on a board with Layers, a StreetLight head on a pole, a layered RoadLine
+	on the road, an ignored (tagged) crate on the main road.
 
 	(P24 and P25 were vehicle cases; vehicles are modelled in Blender now,
 	so BuildGuard doesn't check vehicle rigs.)
 ]]
+
+local Layers = require(script.Parent.Layers)
 
 local TestCases = {}
 
@@ -109,6 +113,25 @@ function TestCases.names(b, road)
 	stand("RoadSign", Vector3.new(6, 4, 0.2), 0)
 	-- Flat and long like a rail, but its first word is "roof".
 	stand("RoofRail", Vector3.new(8, 0.3, 0.3), 10)
+
+	-- A second row: signs and lamp heads named like roads that are flat
+	-- enough by their longest side, mounted the way they're really built.
+	local row = cf * CFrame.new(0, -half.Y, half.Z + 10)
+	local function at(name, size, x, y, z)
+		local p = b.part(name, size, CFrame.new(), STEEL)
+		p.CFrame = row * CFrame.new(x, y, z or 0)
+		return p
+	end
+	b.control(at("RoadSign", Vector3.new(6, 3, 0.2), -14, 1.5))
+	at("SignPost", Vector3.new(0.5, 12, 0.5), -2, 6)
+	b.control(at("Highway_Exit", Vector3.new(12, 4, 0.5), -2, 10, -0.5))
+	-- Placed on a board's front with Layers, as the skill says to.
+	local board = at("SignBoard", Vector3.new(8, 6, 0.4), 12, 3)
+	b.control(Layers.place(b.part("RoadSign", Vector3.new(6, 0.2, 4), CFrame.new(), Color3.fromRGB(40, 140, 60)), board, { face = "Front", config = b.config }))
+	at("LampPole", Vector3.new(0.6, 10, 0.6), 22, 5)
+	b.control(at("StreetLight", Vector3.new(4, 0.5, 1.5), 22, 10.25, -0.4))
+	-- A lane line on the road.
+	b.control(Layers.place(b.part("RoadLine", Vector3.new(6, 0.1, 0.5), CFrame.new(), Color3.fromRGB(240, 240, 235)), road, { layer = 1, u = -3, config = b.config }))
 	local crate = b.part("IgnoredCrate", Vector3.new(3, 3, 3), CFrame.new(), Color3.fromRGB(160, 120, 70))
 	crate.CFrame = cf * CFrame.new(-half.X + 4, half.Y + 1.5, 0) -- clear of the stop line
 	crate:AddTag("BuildGuardIgnore")

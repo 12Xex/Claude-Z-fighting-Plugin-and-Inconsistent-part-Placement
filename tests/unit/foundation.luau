@@ -179,6 +179,95 @@ test("names: first word plus a flat shape; signs, lamps and bed rails aren't roa
 	end) == nil, "parts of a vehicle never count by name")
 end)
 
+test("names: standing panels, layered items, steep parts and narrow strips get no kind; tags still do", function()
+	local config = BG.Config.merge()
+	local function make(name, size, cf, class)
+		local p = Instance.new(class or "Part")
+		p.Name, p.Size = name, size
+		if cf then
+			p.CFrame = cf
+		end
+		return p
+	end
+	local function kind(...)
+		return BG.Classify.kind(make(...), config)
+	end
+	-- Signs, barriers and fences standing on edge.
+	for _, case in {
+		{ "RoadSign", Vector3.new(6, 3, 0.2) },
+		{ "RoadSign", Vector3.new(8, 2, 0.2) },
+		{ "Highway_Exit", Vector3.new(12, 4, 0.5) },
+		{ "Road_Guardrail", Vector3.new(30, 2, 0.5) },
+		{ "RoadBarrier", Vector3.new(20, 3, 1) },
+		{ "RailFence", Vector3.new(20, 4, 0.5) },
+	} do
+		expect(kind(case[1], case[2]) == nil, case[1] .. " " .. tostring(case[2]) .. " stands on edge")
+	end
+	-- Real rails are taller than they're wide, but under a stud tall.
+	expect(kind("Rail_1", Vector3.new(0.3, 0.7, 40)) == "Rail", "a 0.3 x 0.7 rail")
+	expect(kind("Rail_2", Vector3.new(0.4, 0.6, 40)) == "Rail", "a 0.4 x 0.6 rail")
+	-- Too narrow for a road.
+	expect(kind("StreetLight", Vector3.new(4, 0.5, 1.5)) == nil, "a lamp head")
+	expect(kind("Road_Kerb", Vector3.new(30, 0.5, 1)) == nil, "a kerb strip")
+	expect(kind("Road_Lane", Vector3.new(30, 0.5, BG.Classify.ROAD_MIN_WIDTH)) == "Road", "exactly the minimum width")
+	-- Layered items are details, whatever their shape.
+	local line = make("RoadLine", Vector3.new(6, 0.1, 0.5))
+	line:SetAttribute("BuildGuardLayer", 1)
+	expect(BG.Classify.kind(line, config) == nil, "a layered lane line")
+	local patch = make("Road_Patch", Vector3.new(10, 0.1, 10))
+	patch:SetAttribute("BuildGuardLayer", 1)
+	expect(BG.Classify.kind(patch, config) == nil, "a layered patch")
+	local board = make("Board", Vector3.new(8, 6, 0.4), CFrame.new(0, 5, 0))
+	local sign = BG.Layers.place(make("RoadSign", Vector3.new(6, 0.2, 4)), board, { face = "Front" })
+	expect(BG.Classify.kind(sign, config) == nil, "a sign placed on a board's front")
+	sign:SetAttribute("BuildGuardLayer", nil)
+	expect(BG.Classify.kind(sign, config) == nil, "facing sideways, even without the layer mark")
+	-- Within 45° of upright counts (ramps, and a block upside down); steeper doesn't.
+	local size = Vector3.new(20, 1, 16)
+	expect(kind("Road_Ramp", size, CFrame.Angles(0, 0, math.rad(20))) == "Road", "20° ramp")
+	expect(kind("Road_Ramp", size, CFrame.Angles(math.rad(45), 0, 0)) == "Road", "45° ramp")
+	expect(kind("Road_Wall", size, CFrame.Angles(0, 0, math.rad(60))) == nil, "60°")
+	expect(kind("Road_Flipped", size, CFrame.Angles(math.pi, 0, 0)) == "Road", "upside down")
+	-- Wedges by their slope; corner wedges have no flat top.
+	expect(kind("Road_Ramp", Vector3.new(22, 2.9, 12), nil, "WedgePart") == "Road", "gentle wedge")
+	expect(kind("Road_Steep", Vector3.new(22, 8, 4), nil, "WedgePart") == nil, "63° wedge")
+	expect(kind("Road_Ramp", Vector3.new(22, 2.9, 12), CFrame.Angles(math.pi, 0, 0), "WedgePart") == nil, "wedge upside down")
+	expect(kind("Road_Corner", Vector3.new(22, 2, 22), nil, "CornerWedgePart") == nil, "corner wedge")
+	-- Tags and the attribute win whatever the shape.
+	local tagged = make("RoadSign", Vector3.new(6, 3, 0.2))
+	tagged:AddTag("Road")
+	expect(BG.Classify.kind(tagged, config) == "Road", "tag")
+	local steep = make("Road_Wall", size, CFrame.Angles(0, 0, math.rad(60)))
+	steep:SetAttribute("BuildGuardKind", "Road")
+	expect(BG.Classify.kind(steep, config) == "Road", "attribute")
+end)
+
+test("ground: BuildGuardGround on a folder covers the parts in it; the nearest marker wins", function()
+	local config = BG.Config.merge()
+	local floor = Instance.new("Folder")
+	floor.Name = "MapFloor"
+	floor:AddTag("BuildGuardGround")
+	local function tile(name, parent)
+		local p = Instance.new("Part")
+		p.Name, p.Size, p.Parent = name, Vector3.new(200, 2, 200), parent
+		return p
+	end
+	local a = tile("Tile", floor)
+	expect(BG.Classify.isGroundLike(a, config), "tag on the folder")
+	local shed = Instance.new("Model")
+	shed:SetAttribute("BuildGuardGround", false)
+	shed.Parent = floor
+	local b = tile("ShedFloor", shed)
+	expect(not BG.Classify.isGroundLike(b, config), "false on a nearer model wins")
+	a:SetAttribute("BuildGuardGround", false)
+	expect(not BG.Classify.isGroundLike(a, config), "false on the part itself wins")
+	local cache = {}
+	local c = tile("Tile2", floor)
+	expect(BG.Classify.isGroundLike(c, config, cache) and BG.Classify.isGroundLike(c, config, cache), "with a cache")
+	floor:RemoveTag("BuildGuardGround")
+	expect(not BG.Classify.isGroundLike(tile("Tile3", floor), config), "untagged tiles are just parts")
+end)
+
 test("ground is explicit: big slabs aren't ground unless tagged or named", function()
 	local config = BG.Config.merge()
 	local slab = Instance.new("Part")
