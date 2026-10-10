@@ -11,8 +11,6 @@
 ]]
 
 local TestScene = require(script.Parent.TestScene)
-local Config = require(script.Parent.Config)
-local Util = require(script.Parent.Util)
 local Classify = require(script.Parent.Classify)
 
 local SelfTest = {}
@@ -54,9 +52,11 @@ end
 
 function SelfTest.run(BuildGuard, options)
 	options = options or {}
-	local config = Config.merge(options.config)
 	local world = options.world or require(script.Parent.StudioWorld).new()
 	local parent = options.parent or workspace
+	-- Built from the settings the scan will apply under `parent` (place-wide
+	-- ones included), so it plants real violations whatever they are.
+	local config = (BuildGuard.getConfig(parent, { config = options.config }))
 	local scanOptions = { world = world, config = options.config }
 
 	-- Far from the origin so it doesn't land in the middle of a real map.
@@ -159,8 +159,9 @@ function SelfTest.run(BuildGuard, options)
 	local controlsOk, movedControl = sameAs(controlState)
 	row(controlsOk, "controls   no control part moved" .. (if movedControl then " (" .. movedControl.Name .. " moved)" else ""))
 
-	-- 4. Paths, positions, timings, fix report, names.
+	-- 4. Paths, positions, timings, fix report, names, real shapes.
 	SelfTest.extraRows(BuildGuard, scene, before, result, original, config, row)
+	SelfTest.shapeRows(BuildGuard, scanOptions, row)
 
 	local lines = {
 		("BuildGuard self-test: %s (%d check(s), %d failure(s), %d fix pass(es))"):format(
@@ -193,9 +194,10 @@ function SelfTest.extraRows(BuildGuard, scene, before, result, original, config,
 	local root = scene.folder
 
 	-- Repeated names are told apart by path, and every issue says where.
+	-- The path is spelled out here, so a path builder that loses "#n" fails.
 	local p26 = plantedById(scene, "P26")
 	if p26 then
-		local expected = Util.path(p26.part, root)
+		local expected = root.Name .. "/TubRow/TubTop#3"
 		local found = nil
 		for _, issue in before.issues do
 			if issue.check == "zfight" and table.find(issue.parts, p26.part) then
@@ -271,6 +273,54 @@ function SelfTest.extraRows(BuildGuard, scene, before, result, original, config,
 		end
 	end
 	row(#fooled == 0, "names      lamps, signs, bed/roof rails, railings, big slabs and steering/spare wheels aren't misread" .. (if #fooled > 0 then " (" .. table.concat(fooled, ", ") .. ")" else ""))
+end
+
+-- Controls only real geometry passes: each pair would be flagged if its
+-- ball, cylinder or corner wedge were taken for its box, or if any two
+-- overlapping meshes counted as a copy. Never parented, so they can't
+-- touch the map.
+function SelfTest.shapeRows(BuildGuard, scanOptions, row)
+	local function probe(className, name, size, cframe, shape)
+		local p = Instance.new(className)
+		p.Name = name
+		if shape then
+			p.Shape = Enum.PartType[shape]
+		end
+		p.Size = size
+		p.CFrame = cframe
+		p.Anchored = true
+		return p
+	end
+	local at = CFrame.new(0, 10, 0)
+	local cases = {
+		{
+			"a ball inside a cube of its size (touches only at points)",
+			probe("Part", "Cube", Vector3.new(2, 2, 2), at),
+			probe("Part", "Ball", Vector3.new(2, 2, 2), at, "Ball"),
+		},
+		{
+			"a rod lying in a box channel (touches only along lines)",
+			probe("Part", "Channel", Vector3.new(2, 1, 1), at),
+			probe("Part", "Rod", Vector3.new(1.8, 1, 1), at, "Cylinder"),
+		},
+		{
+			"a block in a corner wedge's empty top corner (flush only with its box)",
+			probe("CornerWedgePart", "Corner", Vector3.new(2, 2, 2), at),
+			probe("Part", "Block", Vector3.new(1, 0.5, 1), at * CFrame.new(-0.5, 0.75, 0.5)),
+		},
+		{
+			"two meshes on one spot, one half as tall (not a copy, half their boxes shared)",
+			probe("MeshPart", "MeshTall", Vector3.new(4, 4, 4), at),
+			probe("MeshPart", "MeshLow", Vector3.new(4, 2, 4), at),
+		},
+	}
+	local options = table.clone(scanOptions)
+	options.yield = false
+	for _, case in cases do
+		local report = BuildGuard.scan({ case[2], case[3] }, options)
+		local first = report.issues[1]
+		row(first == nil, "shapes     " .. case[1] .. (if first then " (flagged: " .. first.message .. ")" else ""))
+	end
 end
 
 return SelfTest

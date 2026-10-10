@@ -1,7 +1,7 @@
 -- Shared helpers: name words, paths, spatial hash keys, corner wedges,
 -- support points, place-wide config, classification, joints and vehicles.
 local T = require("../lib")
-local roblox, BG = T.roblox, T.BG
+local roblox, BG, D = T.roblox, T.BG, T.D
 local Instance, Vector3, CFrame, Enum = roblox.Instance, roblox.Vector3, roblox.CFrame, roblox.Enum
 local test, expect, near, setup = T.test, T.expect, T.near, T.setup
 
@@ -49,6 +49,45 @@ test("Util.path tells repeated names apart and Util.find reverses it", function(
 	expect(Util.find(root, "Map/Tub/TubTop#4") == nil)
 	-- Outside the given roots: the path runs from the top.
 	expect(Util.path(tops[1], { other }) == "Map/Tub/TubTop#1", Util.path(tops[1], { other }))
+end)
+
+test("Util.find reads back names with '/', '#n' endings, '%' and no name at all", function()
+	local root = Instance.new("Model")
+	root.Name = "Map"
+	local function child(name)
+		local p = Instance.new("Part")
+		p.Name = name
+		p.Parent = root
+		return p
+	end
+	local decoy = child("Door")
+	for _, name in { "Door#2", "A/B", "Sign#1", "", "50%", "%2F", "A#B" } do
+		local p = child(name)
+		local path = Util.path(p, root)
+		expect(Util.find(root, path) == p, ("%q -> %q -> %s"):format(name, path, tostring(Util.find(root, path))))
+	end
+	expect(Util.path(decoy, root) == "Map/Door", "plain names stay plain")
+	expect(Util.find(root, "Map//Door") == nil, "an empty segment names nothing")
+	expect(Util.find(root, "Map/") == nil, "a trailing slash names nothing")
+end)
+
+test("naming every part in a big flat folder takes one pass per folder", function()
+	local root = Instance.new("Folder")
+	root.Name = "Import"
+	for i = 1, 3000 do
+		local p = Instance.new("Part")
+		p.Name = "Rock" .. (i % 7)
+		p.Parent = root
+	end
+	local ctx = BG.newContext(root, { world = T.FakeWorld.new(root, BG.Geometry) })
+	local started = os.clock()
+	local paths = {}
+	for _, p in root:GetChildren() do
+		paths[ctx.path(p)] = p
+	end
+	local seconds = os.clock() - started
+	expect(paths["Import/Rock3#5"] == Util.find(root, "Import/Rock3#5"), "same names as Util.path")
+	expect(seconds < 1, ("3000 siblings took %.2fs"):format(seconds))
 end)
 
 test("spatial hash keys are numbers and wrap without losing items", function()
@@ -128,6 +167,82 @@ test("place-wide settings reach models outside the place root", function()
 	expect(config.maxLedge == 0.7 and sources.maxLedge == place)
 	m:SetAttribute("BuildGuard_maxLedge", 0.5)
 	expect(BG.Config.resolver(BG.Config.merge(), place).resolve(m).maxLedge == 0.5, "own setting still wins")
+end)
+
+-- Runs fn with BG.Config.place() returning `place` (Lune has no workspace).
+local function withPlace(place, fn)
+	local original = BG.Config.place
+	BG.Config.place = function()
+		return place
+	end
+	local ok, err = pcall(fn)
+	BG.Config.place = original
+	if not ok then
+		error(err, 0)
+	end
+end
+
+test("a scan outside the place lists the place-wide settings and their errors, once", function()
+	local root, world, part = setup()
+	local place = Instance.new("Folder")
+	place.Name = "Workspace"
+	place:SetAttribute("BuildGuard_minRoadWidth", D.minRoadWidth + 8)
+	place:SetAttribute("BuildGuard_maxLedge", "bad")
+	place:SetAttribute("BuildGuardConfigReason", "wide haul roads")
+	local m = Instance.new("Model")
+	m.Name = "Kit"
+	m.Parent = root
+	part("Road_A", Vector3.new(D.minRoadWidth + 10, 0.5, D.minRoadWidth + 2), CFrame.new(0, 0.35, 0), m)
+	local report = BG.scan(m, { world = world, place = place })
+	expect(#T.checks(report, "roadwidth") == 1, BG.format(report))
+	expect(#report.overrides == 1 and report.overrides[1].instance == place, BG.format(report))
+	expect(#T.checks(report, "config") == 1, BG.format(report))
+	-- Inside the place it's an ancestor too: still listed once.
+	root.Parent = place
+	report = BG.scan(m, { world = world, place = place })
+	expect(#report.overrides == 1 and #T.checks(report, "config") == 1, BG.format(report))
+end)
+
+test("a bad zFightNudge drops only itself; the model's other settings stay", function()
+	local root, world, part = setup()
+	local m = Instance.new("Model")
+	m.Name = "Hills"
+	m:SetAttribute("BuildGuard_maxLedge", 0.3)
+	m:SetAttribute("BuildGuard_zFightNudge", 0.005)
+	m.Parent = root
+	local a = part("Road_A", Vector3.new(20, 1, D.minRoadWidth), CFrame.new(0, 0.6, 0), m)
+	part("Plinth", Vector3.new(20, 0.6, D.minRoadWidth), CFrame.new(20, 0.3, 0), m)
+	part("Road_B", Vector3.new(20, 1, D.minRoadWidth), CFrame.new(20, 1.2, 0), m)
+	local config = BG.getConfig(a)
+	expect(config.maxLedge == 0.3 and config.zFightNudge == D.zFightNudge, ("maxLedge %s, nudge %s"):format(config.maxLedge, config.zFightNudge))
+	local report = BG.scan(root, { world = world })
+	expect(#T.checks(report, "ledge") == 1, BG.format(report))
+	local bad = T.checks(report, "config")
+	expect(#bad == 1 and string.find(bad[1].message, "BuildGuard_zFightNudge", 1, true), BG.format(report))
+end)
+
+test("a config reason that isn't text doesn't break the scan", function()
+	local root, world, part = setup()
+	local m = Instance.new("Model")
+	m.Name = "Pass"
+	m:SetAttribute("BuildGuard_maxSlopeChange", 25)
+	m:SetAttribute("BuildGuardConfigReason", true)
+	m.Parent = root
+	part("Wall", Vector3.new(10, 10, 1), CFrame.new(0, 5, 0), m)
+	local ok, report = pcall(BG.scan, root, { world = world })
+	expect(ok, tostring(report))
+	expect(#report.overrides == 1 and string.find(report.overrides[1].text, "true", 1, true), report.overrides[1] and report.overrides[1].text)
+end)
+
+test("snapToGrid follows a place-wide gridSize when no model is given", function()
+	local place = Instance.new("Folder")
+	place.Name = "Workspace"
+	place:SetAttribute("BuildGuard_gridSize", 8)
+	withPlace(place, function()
+		local v = BG.snapToGrid(Vector3.new(5, 1, 5))
+		expect(v == Vector3.new(8, 1, 8), tostring(v))
+	end)
+	expect(BG.snapToGrid(Vector3.new(5, 1, 5)) == Vector3.new(4, 1, 4), "defaults with no place")
 end)
 
 test("face gap grows with zFightViewDistance", function()
@@ -509,6 +624,106 @@ test("far-view rig: every gap pair is built, labelled and ignored by scans", fun
 	expect(rig.folder:FindFirstChild("View_300"))
 	local report = BG.scan(root, { world = world })
 	expect(report.partCount == 1, "only the ground is scanned")
+end)
+
+test("far-view rig: players spawn on the View_ pads", function()
+	local root = setup()
+	local rig = BG.TestScene.buildFarView(root, Vector3.new(0, 0, 0))
+	for _, distance in BG.FarView.DISTANCES do
+		local pad = rig.folder:FindFirstChild(("View_%d"):format(distance))
+		expect(pad and pad:IsA("SpawnLocation"), "View_" .. distance .. " is a spawn")
+		expect(pad.Neutral and pad.Enabled and pad.Anchored, "View_" .. distance .. " takes any player")
+	end
+end)
+
+test("job progress counts parts inside a check, apart from which check it is", function()
+	local root, world, part = setup()
+	for i = 0, 449 do
+		part("Box", Vector3.new(1, 1, 1), CFrame.new((i % 30) * 3, 5, math.floor(i / 30) * 3))
+	end
+	local zfight = 0
+	for i, check in BG.CHECKS do
+		if check.name == "zfight" then
+			zfight = i
+		end
+	end
+	local jobsFolder = Instance.new("Folder")
+	local seen, onRecord = {}, nil
+	BG.startCheck(root, {
+		world = world,
+		jobParent = jobsFolder,
+		onProgress = function(stage, done)
+			if stage == "zfight" and done == 200 then
+				for _, r in jobsFolder:GetChildren() do
+					if r:GetAttribute("State") == "running" then
+						onRecord = { r:GetAttribute("Check"), r:GetAttribute("Checks"), r:GetAttribute("Done") }
+						table.insert(seen, (BG.jobStatus(r.Name, { jobParent = jobsFolder })))
+					end
+				end
+			end
+		end,
+	})
+	expect(#seen == 1, "polled once mid-way")
+	local wanted = ("running: zfight 200/451 parts (check %d of %d, "):format(zfight, #BG.CHECKS)
+	expect(string.find(seen[1], wanted, 1, true), seen[1])
+	expect(onRecord[1] == zfight and onRecord[2] == #BG.CHECKS and onRecord[3] == 200, "kept on the record")
+end)
+
+test("self-test rows can fail: literal TubTop#3 path, real round and wedge shapes", function()
+	local Harness = require("../harness")
+	local SelfTest = Harness.module("SelfTest")
+	local scene = Instance.new("Folder")
+	scene.Name = "BuildGuardTestScene"
+	local tubs = Instance.new("Model")
+	tubs.Name = "TubRow"
+	tubs.Parent = scene
+	for _ = 1, 3 do
+		local p = Instance.new("Part")
+		p.Name = "TubTop"
+		p.Parent = tubs
+	end
+	local third = tubs:GetChildren()[3]
+	local function pathRow()
+		local before = {
+			issues = { { check = "zfight", parts = { third }, paths = { Util.path(third, scene) }, position = Vector3.zero } },
+			timings = {},
+		}
+		local found = nil
+		SelfTest.extraRows(BG, { folder = scene, planted = { { id = "P26", part = third } } }, before, { changes = {} }, {}, BG.Config.merge(), function(ok, text)
+			if string.sub(text, 1, 5) == "paths" then
+				found = ok
+			end
+		end)
+		return found
+	end
+	expect(pathRow() == true, "real paths pass")
+	-- Paths that lose "#n" must fail the row, even when Util.path is the one at fault.
+	local path = Util.path
+	Util.path = function(...)
+		return (string.gsub(path(...), "#%d+", ""))
+	end
+	local ok, result = pcall(pathRow)
+	Util.path = path
+	expect(ok and result == false, "paths without #n still passed")
+
+	local function shapeFailures()
+		local failed = 0
+		SelfTest.shapeRows(BG, { world = T.FakeWorld.new(Instance.new("Folder"), BG.Geometry) }, function(rowOk)
+			if not rowOk then
+				failed += 1
+			end
+		end)
+		return failed
+	end
+	expect(shapeFailures() == 0, "real shapes pass")
+	local shapeOf = BG.Geometry.shapeOf
+	BG.Geometry.shapeOf = function(part)
+		local shape = shapeOf(part)
+		return if shape == "Ball" or shape == "Cylinder" or shape == "CornerWedge" then "Block" else shape
+	end
+	local okShapes, failures = pcall(shapeFailures)
+	BG.Geometry.shapeOf = shapeOf
+	expect(okShapes and failures >= 3, "balls, cylinders and corner wedges as blocks still passed: " .. tostring(failures))
 end)
 
 test("setProjectConfig needs a place; find reverses paths", function()

@@ -21,7 +21,7 @@
 	      `note` is set when the mesh data isn't centred on its bounds.
 	  setMeshTriangles(part, triangles)   gives a part triangles by hand (the
 	      test scene's planted mesh, which has no mesh of its own); they win
-	      over the part's mesh for this world
+	      over the part's mesh for every world in the session
 	  groupsCollide(groupA, groupB) -> boolean   (collision group names)
 	  yield()   waits a frame once about 30 ms of work have passed since the
 	            last wait (does nothing where the caller can't yield)
@@ -342,6 +342,10 @@ local function meshTriangles(part)
 	return fitToPart(data, part)
 end
 
+-- Triangles given by hand (setMeshTriangles), for the whole session: the
+-- test scene is built with one world and scanned with another.
+local given = setmetatable({}, { __mode = "k" })
+
 --------------------------------------------------------------------------------
 -- Collision groups
 --------------------------------------------------------------------------------
@@ -455,7 +459,6 @@ function StudioWorld.new(worldRoot)
 		return Util.hasTag(instance, tag)
 	end
 
-	local given = setmetatable({}, { __mode = "k" })
 	function self.setMeshTriangles(part, triangles)
 		given[part] = triangles
 	end

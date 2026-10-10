@@ -71,13 +71,15 @@ local function defaultWorld()
 	error("BuildGuard: no Roblox workspace here; pass options.world", 3)
 end
 
-local function newContext(root, options)
+-- `scope` (planSnap) gives the roots for joints, vehicles and paths
+-- without collecting their parts for checking.
+local function newContext(root, options, scope)
 	options = options or {}
 	local config = Config.merge(options.config)
 	local world = options.world or defaultWorld()
 	local kinds = {}
 	local resolver = Config.resolver(config, options.place)
-	local roots = if root == nil then {} elseif typeof(root) == "Instance" then { root } else root
+	local roots = scope or (if root == nil then {} elseif typeof(root) == "Instance" then { root } else root)
 	local ctx = { config = config, world = world, root = root, roots = roots, resolver = resolver, options = options }
 	-- Effective config for one part (call options + BuildGuard_ attributes on
 	-- it and its ancestors). Returns config, sources (key -> setting instance).
@@ -90,11 +92,11 @@ local function newContext(root, options)
 	end
 
 	-- Readable path from the scan root ("Map/Truck/TubTop#3"); see Util.path.
-	local paths = {}
+	local paths, pathCache = {}, {}
 	function ctx.path(instance)
 		local p = paths[instance]
 		if not p then
-			p = Util.path(instance, roots)
+			p = Util.path(instance, roots, pathCache)
 			paths[instance] = p
 		end
 		return p
@@ -148,10 +150,13 @@ local function newContext(root, options)
 			world.yield()
 		end
 	end
-	-- Progress for long scans: options.onProgress(stage, done, total).
+	-- Progress for long scans: options.onProgress(stage, done, total, check,
+	-- checks). The scan sets ctx.check of ctx.checks (the check running);
+	-- done of total counts the parts that check has worked through (0 of 0
+	-- when it doesn't count them).
 	function ctx.progress(stage, done, total)
 		if options.onProgress then
-			options.onProgress(stage, done, total)
+			options.onProgress(stage, done, total, ctx.check or 0, ctx.checks or 0)
 		end
 		ctx.yield()
 	end
@@ -209,7 +214,9 @@ BuildGuard.CHECKS = CHECKS
 --   world?, config?,
 --   yield?       -- false: never yield (default: yield between chunks when the
 --                   caller can, so Studio stays responsive)
---   onProgress?  -- function(stage, done, total)
+--   onProgress?  -- function(stage, done, total, check, checks): check
+--                   `check` of `checks` is running and has worked through
+--                   `done` of `total` parts (0 of 0 when it doesn't count)
 -- }
 -- Returns { issues, partCount, config, world, counts = { error, warning },
 --   root, overrides, timings = { { name, seconds } }, seconds, coverage? }.
@@ -222,15 +229,17 @@ function BuildGuard.scan(root, options)
 	table.insert(timings, { name = "collect", seconds = Util.clock() - started })
 	local issues = {}
 	local state = { flagged = {} }
+	ctx.checks = #CHECKS
 	for i, check in CHECKS do
-		ctx.progress(check.name, i - 1, #CHECKS)
+		ctx.check = i
+		ctx.progress(check.name, 0, 0)
 		local t = Util.clock()
 		for _, issue in check.run(ctx, state) do
 			table.insert(issues, issue)
 		end
 		table.insert(timings, { name = check.name, seconds = Util.clock() - t })
 	end
-	ctx.progress("done", #CHECKS, #CHECKS)
+	ctx.progress("done", 0, 0)
 	-- Invalid BuildGuard_ attributes found while resolving (they're ignored,
 	-- and the part falls back to its parent's settings).
 	local badConfig = {}
@@ -313,35 +322,64 @@ function BuildGuard.planFixes(report, issues)
 	return plan, unfixed
 end
 
--- Snap plan for parts (or every road/rail/track under a root instance).
--- Returns plan, skipped ({ part, reason } for ramps and parts with no ground).
-function BuildGuard.planSnap(target, options)
-	local ctx = newContext(nil, options)
-	local solids = {}
-	if typeof(target) == "Instance" then
-		for _, part in Classify.collectParts(target) do
-			if ctx.kindOf(part) then
-				table.insert(solids, Geometry.solid(part))
+-- The outermost model around each instance (below the workspace), so a
+-- snap can tell which parts belong to a vehicle.
+local function snapScope(instances)
+	local roots, seen = {}, {}
+	for _, instance in instances do
+		local top = instance
+		local node = instance.Parent
+		while node and node.Parent and not node:IsA("WorldRoot") do
+			if node:IsA("Model") then
+				top = node
 			end
+			node = node.Parent
 		end
-	else
-		for _, part in target do
+		if not seen[top] then
+			seen[top] = true
+			table.insert(roots, top)
+		end
+	end
+	return roots
+end
+
+-- Snap plan for parts (or every road/rail/track under a root instance).
+-- Ignored parts (BuildGuardIgnore) and parts of vehicles are never moved.
+-- Returns plan, skipped ({ part, reason } for ramps, parts with no ground,
+-- and ignored or vehicle parts that would otherwise have been snapped).
+function BuildGuard.planSnap(target, options)
+	local isRoot = typeof(target) == "Instance"
+	local ctx = newContext(nil, options, snapScope(if isRoot then { target } else target))
+	local solids, skipped = {}, {}
+	for _, part in (if isRoot then Classify.collectParts(target) else target) do
+		if isRoot and not ctx.kindOf(part) then
+			continue
+		end
+		if ctx.isIgnored(part) then
+			table.insert(skipped, { part = part, reason = "ignored (BuildGuardIgnore), so it stays where it is" })
+		elseif ctx.vehicleOf(part) then
+			table.insert(skipped, { part = part, reason = "part of a vehicle; vehicles are never snapped" })
+		else
 			table.insert(solids, Geometry.solid(part))
 		end
 	end
 	local plan = Plan.new()
-	local skipped = Ground.planSnap(solids, ctx, plan)
+	for _, s in Ground.planSnap(solids, ctx, plan) do
+		table.insert(skipped, s)
+	end
 	for _, item in plan.items do
-		item.path = Util.path(item.part, if typeof(target) == "Instance" then { target } else nil)
+		item.path = Util.path(item.part, if isRoot then { target } else nil)
 	end
 	return plan, skipped
 end
 
 -- Runs `fn` as one undoable Studio action (if there's a Studio to undo in)
 -- and returns what it returns. When a recording can't be opened (an MCP
--- call or the command bar already records the whole call, or there's no
--- plugin security), `fn` just runs and the caller's recording covers it.
-function BuildGuard.withUndo(name, fn)
+-- call or the command bar already records the whole call, there's no
+-- plugin security, or an outer withUndo is recording), `fn` just runs and
+-- the caller's recording covers it. `discard` cancels the recording even
+-- when `fn` succeeds, so everything it changed is rolled back.
+function BuildGuard.withUndo(name, fn, discard)
 	local history = game and game:GetService("ChangeHistoryService")
 	local ok, recording = false, nil
 	if history then
@@ -355,7 +393,7 @@ function BuildGuard.withUndo(name, fn)
 		history.FinishRecording,
 		history,
 		recording,
-		if results[1] then Enum.FinishRecordingOperation.Commit else Enum.FinishRecordingOperation.Cancel
+		if results[1] and not discard then Enum.FinishRecordingOperation.Commit else Enum.FinishRecordingOperation.Cancel
 	)
 	if not results[1] then
 		error(results[2], 0)
@@ -470,11 +508,12 @@ function BuildGuard.format(report)
 	return table.concat(lines, "\n")
 end
 
--- Snaps a position (Vector3) or CFrame to the horizontal grid (gridSize,
--- per-model via `relativeTo`'s config). Only X and Z move; height and
--- rotation are kept, since heights come from snapping to ground and layers.
+-- Snaps a position (Vector3) or CFrame to the horizontal grid (gridSize:
+-- `relativeTo`'s config, else the place-wide one). Only X and Z move;
+-- height and rotation are kept, since heights come from snapping to ground
+-- and layers.
 function BuildGuard.snapToGrid(value, relativeTo)
-	local grid = (if relativeTo then BuildGuard.getConfig(relativeTo) else Config.defaults).gridSize
+	local grid = (BuildGuard.getConfig(relativeTo)).gridSize
 	local function round(n)
 		return math.floor(n / grid + 0.5) * grid
 	end
@@ -556,7 +595,8 @@ function BuildGuard.find(root, path)
 	return Util.find(root, path)
 end
 
--- Effective config for `instance`: config, sources (key -> instance that set it).
+-- Effective config for `instance` (nil: the place-wide settings): config,
+-- sources (key -> instance that set it).
 function BuildGuard.getConfig(instance, options)
 	local base = Config.merge(options and options.config)
 	return Config.resolver(base).resolve(instance)
@@ -609,7 +649,7 @@ function BuildGuard.describeOverrides(instances, pathOf)
 			text = ("%s: %s%s"):format(
 				if pathOf then pathOf(instance) else instance:GetFullName(),
 				table.concat(parts, ", "),
-				if reason then (" — %q"):format(reason) else " — no reason given"
+				if reason ~= nil then (" — %q"):format(tostring(reason)) else " — no reason given"
 			),
 		})
 	end
@@ -661,7 +701,8 @@ end
 -- it, and it runs in the background, yielding between chunks so Studio
 -- stays responsive; poll it with BG.jobStatus(id).
 --     local id = BG.startCheck(workspace.Map)
---     print(BG.jobStatus(id))   -- "running: zfight (3/4 checks, 12.3s)" or the report
+--     print(BG.jobStatus(id))   -- "running: zfight 1200/5000 parts (check 3 of 4,
+--                               --  12.3s so far)" or the report
 -- Jobs are kept as StringValues in a BuildGuardJobs folder (in CoreGui when
 -- the caller may write there, else ServerStorage; never saved with the
 -- place), so any later call can read them. The last 5 are kept. A long
@@ -739,19 +780,31 @@ function BuildGuard.startCheck(root, options)
 		record:SetAttribute("Started", Util.clock())
 		record.Parent = folder
 	end
-	local job = { id = id, state = "running", stage = "starting", done = 0, total = 0, started = Util.clock(), record = record }
+	local job = {
+		id = id,
+		state = "running",
+		stage = "starting",
+		done = 0,
+		total = 0,
+		check = 0,
+		checks = 0,
+		started = Util.clock(),
+		record = record,
+	}
 	jobs[id] = job
 	local onProgress = options.onProgress
-	options.onProgress = function(stage, done, total)
-		job.stage, job.done, job.total = stage, done, total
+	options.onProgress = function(stage, done, total, check, checks)
+		job.stage, job.done, job.total, job.check, job.checks = stage, done, total, check, checks
 		if record then
 			record:SetAttribute("Stage", stage)
 			record:SetAttribute("Done", done)
 			record:SetAttribute("Total", total)
+			record:SetAttribute("Check", check)
+			record:SetAttribute("Checks", checks)
 			record:SetAttribute("Seconds", Util.clock() - job.started)
 		end
 		if onProgress then
-			onProgress(stage, done, total)
+			onProgress(stage, done, total, check, checks)
 		end
 	end
 	local function run()
@@ -795,6 +848,14 @@ function BuildGuard.page(text, page, size)
 	return table.concat(out, "\n")
 end
 
+-- "zfight 1200/5000 parts (check 3 of 4, 12.3s so far)". The parts are
+-- counted within the check, and only shown when the check counts them.
+local function progressText(stage, done, total, check, checks, seconds)
+	local parts = if total > 0 then (" %d/%d parts"):format(done, total) else ""
+	local which = if checks > 0 then ("check %d of %d, "):format(check, checks) else ""
+	return ("%s%s (%s%.1fs so far)"):format(tostring(stage), parts, which, seconds)
+end
+
 -- Status of a started check: text, state ("running" | "done" | "failed" |
 -- "unknown"). When done, the text is the full report and fix preview, a
 -- page at a time if options.page is given (120 lines per page).
@@ -819,20 +880,35 @@ function BuildGuard.jobStatus(id, options)
 		return finished(record.Value, record:GetAttribute("State"))
 	end
 	if job or record then
-		local stage = if job then job.stage else record:GetAttribute("Stage")
-		local done = if job then job.done else record:GetAttribute("Done") or 0
-		local total = if job then job.total else record:GetAttribute("Total") or 0
-		local seconds = if job then Util.clock() - job.started else record:GetAttribute("Seconds") or 0
-		return ("BuildGuard check %s running: %s (%d/%d checks done, %.1fs so far)"):format(id, tostring(stage), done, total, seconds),
-			"running"
+		local function field(key, attribute)
+			if job then
+				return job[key]
+			end
+			return record:GetAttribute(attribute) or 0
+		end
+		local text = progressText(
+			if job then job.stage else record:GetAttribute("Stage"),
+			field("done", "Done"),
+			field("total", "Total"),
+			field("check", "Check"),
+			field("checks", "Checks"),
+			if job then Util.clock() - job.started else record:GetAttribute("Seconds") or 0
+		)
+		return ("BuildGuard check %s running: %s"):format(id, text), "running"
 	end
 	return ("No BuildGuard check %s (only the last %d are kept)"):format(tostring(id), MAX_JOBS), "unknown"
 end
 
 -- Builds the planted-problem test scene and proves every problem is found and
 -- fixed (or flagged, for lint). See SelfTest.lua.
+-- The whole run is one undo recording, cancelled at the end, so the scene,
+-- its terrain and its fixes leave no undo steps behind. With options.keep
+-- the recording is kept instead: one step that removes the scene.
 function BuildGuard.selfTest(options)
-	return require(script.SelfTest).run(BuildGuard, options)
+	local SelfTest = require(script.SelfTest)
+	return BuildGuard.withUndo("BuildGuard self-test", function()
+		return SelfTest.run(BuildGuard, options)
+	end, not (options and options.keep))
 end
 
 return BuildGuard

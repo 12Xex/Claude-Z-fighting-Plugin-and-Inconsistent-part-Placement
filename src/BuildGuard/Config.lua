@@ -273,27 +273,43 @@ end
 --   resolver.resolve(instance) -> config, sources (key -> instance that set it)
 --   resolver.errors            -> invalid attributes seen so far
 --   resolver.owners            -> instances seen carrying valid overrides
+--                                 (the place first, when it has any)
 function Config.resolver(base, place)
 	local cache = {}
 	local self = { errors = {}, owners = {} }
-	local rootConfig, rootSources = base, {}
 	if place == nil then
 		place = Config.place()
 	end
-	if place then
-		local own = Config.ownOverrides(place)
-		if next(own) then
-			local merged = table.clone(base)
-			for key, value in own do
-				merged[key] = value
-				rootSources[key] = place
-			end
-			if checkNudge(merged) then
-				rootConfig = merged
-			else
-				rootSources = {}
+
+	-- `instance`'s own overrides on top of what it inherits. A zFightNudge
+	-- not above zFightTolerance is dropped on its own; the rest still apply.
+	local function overlay(instance, config, sources)
+		local own, errors = Config.ownOverrides(instance)
+		for _, e in errors do
+			table.insert(self.errors, e)
+		end
+		if own.zFightNudge ~= nil then
+			local ok, message = checkNudge({ zFightNudge = own.zFightNudge, zFightTolerance = config.zFightTolerance })
+			if not ok then
+				own.zFightNudge = nil
+				table.insert(self.errors, { instance = instance, attribute = Config.ATTRIBUTE_PREFIX .. "zFightNudge", message = message })
 			end
 		end
+		if next(own) == nil then
+			return config, sources
+		end
+		local merged, mergedSources = table.clone(config), table.clone(sources)
+		for key, value in own do
+			merged[key] = value
+			mergedSources[key] = instance
+		end
+		table.insert(self.owners, instance)
+		return merged, mergedSources
+	end
+
+	local rootConfig, rootSources = base, {}
+	if place then
+		rootConfig, rootSources = overlay(place, base, {})
 	end
 
 	function self.resolve(instance)
@@ -305,23 +321,9 @@ function Config.resolver(base, place)
 			return hit[1], hit[2]
 		end
 		local config, sources = self.resolve(instance.Parent)
-		local own, errors = Config.ownOverrides(instance)
-		for _, e in errors do
-			table.insert(self.errors, e)
-		end
-		if next(own) then
-			local merged, mergedSources = table.clone(config), table.clone(sources)
-			for key, value in own do
-				merged[key] = value
-				mergedSources[key] = instance
-			end
-			local ok, message = checkNudge(merged)
-			if ok then
-				config, sources = merged, mergedSources
-				table.insert(self.owners, instance)
-			else
-				table.insert(self.errors, { instance = instance, attribute = "BuildGuard_zFightNudge", message = message })
-			end
+		-- The place's own settings are already under everything.
+		if instance ~= place then
+			config, sources = overlay(instance, config, sources)
 		end
 		cache[instance] = { config, sources }
 		return config, sources

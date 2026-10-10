@@ -24,8 +24,9 @@
 	                                          floor, not the roof (final height is checked)
 	  P14 Road_Tunnel        headroom   flag  tunnel roof lower than the MineTunnel model's
 	                                          roadHeadroom
-	  P15 Strut_FL           zfight     fix   truck strut welded flush to the chassis side; the
-	                                          weld must be updated to hold the nudged strut
+	  P15 Strut              zfight     fix   conveyor-frame strut welded flush to the frame
+	                                          side; the weld must be updated to hold the
+	                                          nudged strut
 	  P16 Road_Thick         edge       flag  road so thick that the step from the ground up
 	                                          onto it is above maxLedge
 	  P27 Road_UnderLow      headroom   flag  a Road_* deck crossing over it lower than the
@@ -241,31 +242,32 @@ function TestScene.build(parent, world, config, origin)
 	table.insert(planted, { id = "P14", part = tunnelRoad, check = "headroom", expect = "flag", note = "roof 12 up, needs 14" })
 	control(part("Rail_Tunnel", Vector3.new(20, 0.5, 1), CFrame.new(tx, railY, W / 2 + 4), Color3.fromRGB(110, 110, 120), Enum.Material.Metal)).Parent = mine
 
-	-- Haul truck with a strut welded flush against the chassis side.
-	local truck = Instance.new("Model")
-	truck.Name = "HaulTruck"
-	truck.Parent = folder
+	-- Conveyor frame with a strut welded flush against the frame's side (not
+	-- a vehicle: vehicles are kept out of the models BuildGuard fixes).
+	local conveyor = Instance.new("Model")
+	conveyor.Name = "ConveyorFrame"
+	conveyor.Parent = folder
 	local tx2 = -150
-	local chassis = part("Chassis", Vector3.new(8, 2, 16), CFrame.new(tx2, 2, 0), Color3.fromRGB(230, 170, 30), Enum.Material.Metal)
-	chassis.Parent = truck
-	part("Cab", Vector3.new(8, 6, 5), CFrame.new(tx2, 6, -5), Color3.fromRGB(230, 170, 30), Enum.Material.Metal).Parent = truck
+	local frame = part("Frame", Vector3.new(8, 2, 16), CFrame.new(tx2, 2, 0), Color3.fromRGB(230, 170, 30), Enum.Material.Metal)
+	frame.Parent = conveyor
+	part("Hopper", Vector3.new(8, 6, 5), CFrame.new(tx2, 6, -5), Color3.fromRGB(230, 170, 30), Enum.Material.Metal).Parent = conveyor
 	for _, x in { -4.5, 4.5 } do
 		for _, z in { -6, 6 } do
-			local wheel = part("Wheel", Vector3.new(1, 3, 3), CFrame.new(tx2 + x, 1.5, z), Color3.fromRGB(30, 30, 30))
-			wheel.Shape = Enum.PartType.Cylinder
-			wheel.Parent = truck
+			local roller = part("Roller", Vector3.new(1, 3, 3), CFrame.new(tx2 + x, 1.5, z), Color3.fromRGB(30, 30, 30))
+			roller.Shape = Enum.PartType.Cylinder
+			roller.Parent = conveyor
 		end
 	end
-	local strut = part("Strut_FL", Vector3.new(1, 2, 1), CFrame.new(tx2 + 3.5, 1.5, -3), Color3.fromRGB(120, 120, 130), Enum.Material.Metal)
-	strut.Parent = truck
+	local strut = part("Strut", Vector3.new(1, 2, 1), CFrame.new(tx2 + 3.5, 1.5, -3), Color3.fromRGB(120, 120, 130), Enum.Material.Metal)
+	strut.Parent = conveyor
 	local weld = Instance.new("Weld")
 	weld.Name = "StrutWeld"
-	weld.Part0 = chassis
+	weld.Part0 = frame
 	weld.Part1 = strut
-	weld.C0 = chassis.CFrame:Inverse() * strut.CFrame
+	weld.C0 = frame.CFrame:Inverse() * strut.CFrame
 	weld.Parent = strut
-	plant(strut, "P15", "zfight", "fix", "welded flush to the chassis")
-	truck.PrimaryPart = chassis
+	plant(strut, "P15", "zfight", "fix", "welded flush to the frame")
+	conveyor.PrimaryPart = frame
 
 	-- Per-model override: MountainPass allows its own steep road.
 	local pass = Instance.new("Model")

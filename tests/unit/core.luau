@@ -217,6 +217,44 @@ test("a road buried deeper than snapSearchUp is skipped, not dragged to the surf
 	expect(#buried == 1 and buried[1].fixItems == nil, "flagged, no automatic fix")
 end)
 
+test("snap leaves parts of vehicles and ignored parts where they are", function()
+	local root, world, part = setup()
+	local map = Instance.new("Model")
+	map.Name = "Quarry"
+	map.Parent = root
+	local truck = Instance.new("Model")
+	truck.Name = "Excavator"
+	truck.Parent = map
+	local seat = Instance.new("VehicleSeat")
+	seat.Size, seat.CFrame, seat.Anchored, seat.Parent = Vector3.new(2, 1, 2), CFrame.new(40, 4, 0), true, truck
+	local body = part("Body", Vector3.new(8, 2, 12), CFrame.new(40, 2.5, 0), truck)
+	local tread = part("Track_Left", Vector3.new(2, 0.5, 12), CFrame.new(36, 1, 0), truck) -- hovering
+	for _, p in { seat, tread } do
+		local weld = Instance.new("WeldConstraint")
+		weld.Part0, weld.Part1 = body, p
+		weld.Parent = p
+	end
+	local helpers = Instance.new("Folder")
+	helpers.Name = "Helpers"
+	helpers:SetAttribute("BuildGuardIgnore", true)
+	helpers.Parent = map
+	local guide = part("Road_Guide", Vector3.new(20, 0.5, 4), CFrame.new(0, 3, 30), helpers)
+	local road = part("Road_1", Vector3.new(30, 0.5, D.minRoadWidth), CFrame.new(0, 3, 0), map)
+
+	local plan = BG.planSnap(map, { world = world })
+	expect(#plan.items == 1 and plan.items[1].part == road, BG.Plan.describe(plan))
+
+	-- Listed one by one, they're skipped and say why.
+	local listed, skipped = BG.planSnap({ tread, guide, road }, { world = world })
+	expect(#listed.items == 1 and listed.items[1].part == road, BG.Plan.describe(listed))
+	local why = {}
+	for _, s in skipped do
+		why[s.part] = s.reason
+	end
+	expect(why[tread] and string.find(why[tread], "vehicle", 1, true), tostring(why[tread]))
+	expect(why[guide] and string.find(why[guide], "BuildGuardIgnore", 1, true), tostring(why[guide]))
+end)
+
 test("road sunk slightly (within groundTolerance) is not flagged", function()
 	local root, world, part = setup()
 	part("Road_OK", Vector3.new(D.minRoadWidth + 8, 1, D.minRoadWidth), CFrame.new(0, 0.5, 0)) -- resting with no lift
@@ -586,20 +624,64 @@ T.section("Self-test (planted-problem scene)")
 -- maxLedge 0.5, not 0.25: the scene's roads must be thin enough to drive up
 -- onto from the ground (thickness + roadLift under maxLedge), and 0.25
 -- leaves no room for a road plus its lift.
-for _, overrides in { {}, { maxLedge = 0.5, maxSlopeChange = 8 }, { maxLedge = 1, maxSlopeChange = 30 } } do
+-- `place` settings are attributes on the place: in Studio the self-test
+-- builds its scene in workspace, so place-wide project numbers apply to it.
+for _, case in {
+	{ config = {} },
+	{ config = { maxLedge = 0.5, maxSlopeChange = 8 } },
+	{ config = { maxSlopeChange = 30 }, place = { maxLedge = 0.8, minRoadWidth = D.minRoadWidth + 2 } },
+} do
 	local label = {}
-	for k, v in overrides do
+	for k, v in case.config do
 		table.insert(label, k .. "=" .. tostring(v))
+	end
+	for k, v in case.place or {} do
+		table.insert(label, "place-wide " .. k .. "=" .. tostring(v))
 	end
 	test("self-test passes with " .. (if #label > 0 then table.concat(label, ", ") else "defaults"), function()
 		local root = Instance.new("Folder")
-		local result = BG.selfTest({
-			world = FakeWorld.new(root, BG.Geometry),
+		root.Name = "Workspace"
+		for k, v in case.place or {} do
+			root:SetAttribute("BuildGuard_" .. k, v)
+		end
+		local world = FakeWorld.new(root, BG.Geometry)
+		-- The whole run must be one undo recording, cancelled at the end:
+		-- every other recording (and the terrain) happens inside it.
+		local calls, depth, outside = {}, 0, 0
+		local place, withUndo, fill = BG.Config.place, BG.withUndo, world.fillTerrain
+		world.fillTerrain = function(...)
+			if depth == 0 then
+				outside += 1
+			end
+			return fill(...)
+		end
+		BG.Config.place = function()
+			return root
+		end
+		BG.withUndo = function(name, fn, discard)
+			table.insert(calls, { name = name, depth = depth, discard = discard })
+			depth += 1
+			local results = table.pack(pcall(withUndo, name, fn, discard))
+			depth -= 1
+			if not results[1] then
+				error(results[2], 0)
+			end
+			return table.unpack(results, 2, results.n)
+		end
+		local ok, result = pcall(BG.selfTest, {
+			world = world,
 			parent = root,
-			config = overrides,
+			config = case.config,
 			origin = Vector3.new(4000, 0, 4000),
 		})
+		BG.Config.place, BG.withUndo = place, withUndo
+		expect(ok, tostring(result))
 		expect(result.passed, result.text)
 		expect(#root:GetChildren() == 0, "scene cleaned up")
+		expect(calls[1] and calls[1].depth == 0 and calls[1].discard == true, "one outer recording, cancelled")
+		for i = 2, #calls do
+			expect(calls[i].depth > 0, calls[i].name .. " made an undo step of its own")
+		end
+		expect(outside == 0, "terrain filled outside the recording")
 	end)
 end

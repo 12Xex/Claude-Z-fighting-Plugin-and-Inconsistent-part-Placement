@@ -5,13 +5,17 @@
 	Builds a row of plate pairs. In each pair a thin red plate lies on a white
 	one, so their top faces are exactly `gap` apart (0.005 to 0.2 studs), and a
 	matching pair stands upright so the gap is also seen edge-on. Each pair is
-	labelled with its gap. Viewing spots (platforms named View_100, View_300,
-	View_600) sit that many studs away.
+	labelled with its gap. Viewing pads (View_100, View_300, View_600) sit
+	that many studs away; each is a neutral SpawnLocation, since the rig is
+	far from the map's own spawns.
 
-	Publish or Team Test the place, stand on each spot on a phone and look at
-	the rig: every pair that shimmers or shows white through red is a gap too
-	small for that distance. Use the smallest clean gap for map-sized models
-	(BuildGuard_zFightViewDistance on the model sets it from a distance).
+	Publish the place to a test place (phones can't join Team Test) and join
+	it on a phone: players spawn on the View_ pads. Disable the map's own
+	SpawnLocations while testing, or reset to land on another pad. Look at
+	the rig from each pad: every pair that shimmers or shows white through
+	red is a gap too small for that distance. Use the smallest clean gap for
+	map-sized models (BuildGuard_zFightViewDistance on the model sets it
+	from a distance). Delete the rig afterwards, so nobody spawns there.
 
 	The whole rig carries BuildGuardIgnore, so scans skip it.
 ]]
@@ -32,8 +36,8 @@ function FarView.build(parent, origin)
 	folder.Name = "BuildGuardFarViewRig"
 	folder:SetAttribute("BuildGuardIgnore", true)
 
-	local function part(name, size, cframe, color)
-		local p = Instance.new("Part")
+	local function part(name, size, cframe, color, className)
+		local p = Instance.new(className or "Part")
 		p.Name = name
 		p.Size = size
 		p.CFrame = base * cframe
@@ -78,8 +82,10 @@ function FarView.build(parent, origin)
 	end
 
 	for _, distance in FarView.DISTANCES do
-		local spot = part(("View_%d"):format(distance), Vector3.new(8, 1, 8), CFrame.new(0, 0.5, -distance), Color3.fromRGB(60, 120, 230))
+		local spot = part(("View_%d"):format(distance), Vector3.new(8, 1, 8), CFrame.new(0, 0.5, -distance), Color3.fromRGB(60, 120, 230), "SpawnLocation")
 		spot.Material = Enum.Material.Neon
+		spot.Neutral = true
+		spot.Enabled = true
 	end
 
 	folder.Parent = parent
