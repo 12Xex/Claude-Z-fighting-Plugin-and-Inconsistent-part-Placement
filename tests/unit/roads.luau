@@ -210,6 +210,14 @@ test("edge: parts passed in skipEdges (already reported off the ground) aren't e
 	expect(edgeCount({ [road] = true }) == 0, "skipped")
 end)
 
+test("edge: a scan doesn't edge-check roads it already reports as off the ground", function()
+	local root, world, part = setup()
+	part("Road_Hover", Vector3.new(30, 0.5, W), CFrame.new(0, 3, 0))
+	local report = BG.scan(root, { world = world })
+	expect(#checks(report, "offground") == 1, BG.format(report))
+	expect(#checks(report, "edge") == 0, BG.format(report))
+end)
+
 T.section("Roads: paths and positions in messages")
 
 test("every road check names parts by path and gives a position", function()

@@ -174,7 +174,8 @@ end
 BuildGuard.newContext = newContext
 
 -- The checks a scan runs, in order. Buried runs first: parts it flags are
--- skipped by the off-ground check (one issue per part is enough).
+-- skipped by the off-ground check, and parts either flags are skipped by
+-- the edge check (one issue per part is enough).
 local CHECKS = {
 	{ name = "buried", run = function(ctx, state)
 		local issues = Buried.scan(ctx)
@@ -186,13 +187,19 @@ local CHECKS = {
 		return issues
 	end },
 	{ name = "offground", run = function(ctx, state)
-		return Ground.scan(ctx, state.flagged)
+		local issues = Ground.scan(ctx, state.flagged)
+		for _, issue in issues do
+			state.flagged[issue.parts[1]] = true
+		end
+		return issues
 	end },
 	{ name = "zfight", run = function(ctx)
 		return ZFight.scan(ctx)
 	end },
-	{ name = "drivability", run = function(ctx)
-		return Drivability.scan(ctx)
+	-- Roads already reported as buried or off the ground get no edge
+	-- warnings: snapping them changes their edges anyway.
+	{ name = "drivability", run = function(ctx, state)
+		return Drivability.scan(ctx, state.flagged)
 	end },
 }
 BuildGuard.CHECKS = CHECKS
