@@ -15,12 +15,14 @@
 	ways and are left alone: those faces are hidden, not flickering.
 
 	Far view: in a model seen from far away (zFightViewDistance), same-facing
-	faces need Config.faceGap between them. Closer than that, but beyond
-	zFightTolerance, is a "zgap" warning, fixed like a z-fight.
+	faces need 2 * Config.depthStep(distance) between them. Closer than that,
+	but beyond zFightTolerance, is a "zgap" warning. Under about 130 studs
+	the usual zFightNudge already holds, so there are no zgaps there.
 
 	The fix plan moves one part of each pair (the "mover") so its surface
 	clears the other by the pair's face gap (zFightNudge unless the model is
-	seen from far away):
+	seen from far away). A pair whose parts are both locked (or ground) has
+	no mover: its issue says so and isn't auto-fixable.
 	  * Flat faces: the mover is nudged outward. If it z-fights on both
 	    opposite sides of one axis, a nudge clears both but sinks one side
 	    into the other part. That's fine when the sunk side is hidden anyway (a
@@ -29,6 +31,11 @@
 	    the gap on each side instead.
 	  * Round surfaces: the mover's radius grows. Its CFrame stays, so joints
 	    stay valid.
+	  * A zgap keeps its order: the surface in front stays in front. A face
+	    set behind the other is pushed further back; an inner ball or rod
+	    shrinks instead of growing past the outer one.
+	  * When the other part is already planned to move (a road snapped to
+	    the ground, another mover), the mover clears where it will be.
 ]]
 
 local Config = require(script.Parent.Parent.Config)
@@ -50,6 +57,10 @@ local BRUTE_FORCE_PAIRS = 64
 local MIN_TRIANGLE_OVERLAP = 1e-6
 -- A fixed pair sits exactly at the face gap; float rounding mustn't flag it.
 local GAP_SLACK = 1e-3
+-- Pair and face tests between ctx.yield calls.
+local WORK_PER_YIELD = 256
+-- Moves smaller than this (studs) are float rounding, not a need.
+local MIN_NEED = 1e-6
 local NO_FACES = {}
 
 local function boxesNear(a, b, margin)
@@ -123,10 +134,12 @@ local function faceIndex(faces)
 end
 
 -- Same-facing faces of `a` and `b` within `search` of each other that
--- overlap: { faceA, faceB, area, distance, position }.
-local function faceContacts(facesA, facesB, search, minArea, indexOf)
+-- overlap: { faceA, faceB, area, distance, position }. Calls `worked()`
+-- once per face pair tested.
+local function faceContacts(facesA, facesB, search, minArea, indexOf, worked)
 	local contacts = {}
 	local function test(fa, fb)
+		worked()
 		if fa.normal:Dot(fb.normal) < PARALLEL or not boundsTouch(fa, fb, search) then
 			return
 		end
@@ -265,7 +278,10 @@ local function pairIssue(ctx, a, b, contacts)
 	local pairConfig, sources = ctx.pairConfig(a.part, b.part)
 	local viewDistance = pairConfig.zFightViewDistance or 0
 	local gap = Config.faceGap(pairConfig)
-	local limit = if viewDistance > 0 then math.max(tolerance, gap - GAP_SLACK) else tolerance
+	-- Only the far view's own need counts here: up close (under about 130
+	-- studs) the usual nudge already holds, and gaps it leaves are fine.
+	local farGap = 2 * Config.depthStep(viewDistance)
+	local limit = if viewDistance > 0 then math.max(tolerance, farGap - GAP_SLACK) else tolerance
 
 	local kept, total, fighting, closest, largest = {}, 0, false, math.huge, nil
 	for _, c in contacts do
@@ -324,6 +340,11 @@ local function pairIssue(ctx, a, b, contacts)
 			gap
 		)
 	end
+	-- The fix moves one part of the pair; locked and ground parts never move.
+	if Classify.isLocked(a.part, base) and Classify.isLocked(b.part, base) then
+		issue.planner = nil
+		issue.message ..= " — both parts are locked (or ground): move one by hand, or unlock one"
+	end
 	return issue
 end
 
@@ -350,9 +371,17 @@ function ZFight.scan(ctx)
 
 	-- Mesh triangles are read once per part, the first time it's near
 	-- something (a mesh alone can't z-fight).
-	local meshFaces = {}
+	local meshLike, meshFaces = {}, {}
+	local function isMeshLike(s)
+		local m = meshLike[s]
+		if m == nil then
+			m = Geometry.isMeshLike(s.part)
+			meshLike[s] = m
+		end
+		return m
+	end
 	local function facesOf(s)
-		if not Geometry.isMeshLike(s.part) then
+		if not isMeshLike(s) then
 			return Geometry.faces(s)
 		end
 		if meshFaces[s] == nil then
@@ -370,6 +399,18 @@ function ZFight.scan(ctx)
 		return index
 	end
 
+	-- One part can touch thousands (a slab under a town) and two big meshes
+	-- make millions of face tests, so yield as the work piles up (ctx.yield
+	-- only waits once Studio's time slice is used).
+	local work = 0
+	local function worked()
+		work += 1
+		if work >= WORK_PER_YIELD then
+			work = 0
+			ctx.yield()
+		end
+	end
+
 	local issues = {}
 	local copyOf = {}
 	local margin = Vector3.one * search
@@ -384,6 +425,7 @@ function ZFight.scan(ctx)
 			if j <= i or not boxesNear(a, b, search) then
 				continue
 			end
+			worked()
 			if Meshes.isDuplicate(a, b, tolerance) then
 				-- Report each copy once, against the first part it copies.
 				if not copyOf[j] then
@@ -393,13 +435,13 @@ function ZFight.scan(ctx)
 				continue
 			end
 			local facesA, facesB = facesOf(a), facesOf(b)
-			if Geometry.isMeshLike(a.part) and Geometry.isMeshLike(b.part) and not (meshFaces[a] and meshFaces[b]) then
+			if isMeshLike(a) and isMeshLike(b) and not (meshFaces[a] and meshFaces[b]) then
 				local ratio = Meshes.alignedOverlap(a, b)
 				if ratio and ratio >= config.meshOverlapRatio then
 					table.insert(issues, Meshes.overlapIssue(ctx, a, b, ratio))
 				end
 			end
-			local contacts = faceContacts(facesA, facesB, search, minArea, indexOf)
+			local contacts = faceContacts(facesA, facesB, search, minArea, indexOf, worked)
 			local round = roundContact(a, b, tolerance, search, minArea)
 			if round then
 				table.insert(contacts, round)
@@ -410,6 +452,13 @@ function ZFight.scan(ctx)
 					table.insert(issues, issue)
 				end
 			end
+		end
+		-- Pairs are (i, j > i): `a` never comes up again, so its triangles
+		-- can go (issues keep only the faces in their contacts).
+		local done = meshFaces[a]
+		if done then
+			indexes[done] = nil
+			meshFaces[a] = false
 		end
 	end
 	return issues
@@ -499,26 +548,65 @@ local function newRequest(mover)
 		negFace = {},
 		moves = {},
 		roundGrow = 0,
+		roundShrink = 0,
+		-- a zgap face pushed further back
+		back = false,
 		against = {},
 		exclude = { [mover.part] = true },
 		gap = 0,
 		issues = {},
+		-- { issue, other, gap } per issue
+		entries = {},
 	}
 end
 
--- Adds one issue's needs to the mover's request.
-local function addContacts(request, issue, mover, gap)
-	local a = issue.solids[1]
+-- Where face `f` of solid `s` will be once `item` (its plan item, if it has
+-- one) moves or resizes it: center, normal.
+local function plannedFace(f, s, item)
+	if not item then
+		return f.center, f.normal
+	end
+	local ratio = item.toSize / s.size
+	local center = item.toCFrame:PointToWorldSpace(s.cf:PointToObjectSpace(f.center) * ratio)
+	local normal = item.toCFrame:VectorToWorldSpace((s.cf:VectorToObjectSpace(f.normal) / ratio).Unit)
+	return center, normal
+end
+
+-- Adds one issue's needs to the mover's request. When the other part
+-- already has a plan item (a road's snap, an earlier mover), the mover
+-- clears where that part will be, not where it is.
+local function addContacts(request, entry, tolerance, item)
+	local issue, other, gap = entry.issue, entry.other, entry.gap
+	local moverIsA = request.solid == issue.solids[1]
 	for _, contact in issue.contacts do
-		local moverFace = if mover == a then contact.faceA else contact.faceB
-		local baseFace = if mover == a then contact.faceB else contact.faceA
+		local moverFace = if moverIsA then contact.faceA else contact.faceB
+		local baseFace = if moverIsA then contact.faceB else contact.faceA
+		-- A zgap's surfaces are clearly apart, so which one shows is meant:
+		-- widen the gap the way it runs instead of swapping them.
+		local keepOrder = math.abs(contact.distance) > tolerance
 		if contact.round then
-			local rMover = if mover == a then contact.radiusA else contact.radiusB
-			local rOther = if mover == a then contact.radiusB else contact.radiusA
-			request.roundGrow = math.max(request.roundGrow, gap - (rMover - rOther))
+			local rMover = if moverIsA then contact.radiusA else contact.radiusB
+			local rOther = if moverIsA then contact.radiusB else contact.radiusA
+			local inner = keepOrder and rMover < rOther
+			if item then
+				rOther = radius({ shape = other.shape, half = item.toSize / 2 })
+			end
+			if inner then
+				request.roundShrink = math.max(request.roundShrink, gap - (rOther - rMover))
+			else
+				request.roundGrow = math.max(request.roundGrow, gap - (rMover - rOther))
+			end
 		else
-			local need = gap - (moverFace.center - baseFace.center):Dot(baseFace.normal)
-			if need > 0 then
+			local baseCenter, normal = plannedFace(baseFace, other, item)
+			local ahead = (moverFace.center - baseCenter):Dot(normal)
+			if keepOrder and (moverFace.center - baseFace.center):Dot(baseFace.normal) < 0 then
+				-- Behind the other face: push it further back.
+				if gap + ahead > MIN_NEED then
+					addMove(request.moves, -moverFace.normal, gap + ahead)
+					request.back = true
+				end
+			elseif gap - ahead > MIN_NEED then
+				local need = gap - ahead
 				if moverFace.axis then
 					local side = if moverFace.sign > 0 then request.pos else request.neg
 					local faces = if moverFace.sign > 0 then request.posFace else request.negFace
@@ -566,11 +654,24 @@ local function resolveRequest(request, world)
 	end
 	local toCFrame = s.cf + move
 	local toSize = s.size + Vector3.new(grow[1], grow[2], grow[3])
-	local g = request.roundGrow
-	if g > 0 then
+	local g, k = request.roundGrow, request.roundShrink
+	if g > 0 and k > 0 then
+		-- Inside one round surface and outside another: no size clears both.
+		return nil
+	elseif g > 0 then
 		toSize += if s.shape == "Ball" then Vector3.new(2 * g, 2 * g, 2 * g) else Vector3.new(0, 2 * g, 2 * g)
+	elseif k > 0 then
+		if k >= radius(s) then
+			return nil
+		end
+		toSize -= if s.shape == "Ball" then Vector3.new(2 * k, 2 * k, 2 * k) else Vector3.new(0, 2 * k, 2 * k)
 	end
-	local action = if grew then "grow past both faces" elseif g > 0 then "grow its round surface clear" else "nudge clear"
+	local action = if grew
+		then "grow past both faces"
+		elseif g > 0 then "grow its round surface clear"
+		elseif k > 0 then "shrink its round surface clear"
+		elseif request.back then "nudge further back"
+		else "nudge clear"
 	return toCFrame, toSize, action
 end
 
@@ -578,6 +679,10 @@ end
 -- Returns the issues it couldn't fix. `config` is the scan's base config (for
 -- locking rules); each issue's gap comes from its own pair config. `world`
 -- (optional) lets it check whether a sunk face would be hidden.
+-- Items already in `plan` (snaps to ground) are where their parts will be,
+-- so movers clear those places. Each item starts from the scan's snapshot
+-- of its part, so applying it refuses (stale plan) if the part was edited
+-- after the scan.
 function ZFight.plan(issues, config, plan, world)
 	local requests, order, unfixable = {}, {}, {}
 
@@ -600,26 +705,60 @@ function ZFight.plan(issues, config, plan, world)
 		request.exclude[other.part] = true
 		local gap = Config.faceGap(issue.config or config)
 		request.gap = math.max(request.gap, gap)
+		request.fights = request.fights or issue.check ~= "zgap"
 		table.insert(request.issues, issue)
-		addContacts(request, issue, mover, gap)
+		table.insert(request.entries, { issue = issue, other = other, gap = gap })
 	end
 
-	for _, part in order do
+	local function resolve(part)
 		local request = requests[part]
+		request.done = true
+		for _, entry in request.entries do
+			addContacts(request, entry, config.zFightTolerance, plan.byPart[entry.other.part])
+		end
 		local toCFrame, toSize, action = resolveRequest(request, world)
 		if not toCFrame then
 			for _, issue in request.issues do
 				table.insert(unfixable, issue)
 			end
-			continue
+			return
 		end
 		local against = {}
 		for name in request.against do
 			table.insert(against, name)
 		end
 		table.sort(against)
-		local reason = ("z-fight with %s: %s"):format(table.concat(against, ", "), action)
-		Plan.add(plan, Plan.item(part, "zfight", reason, toCFrame, toSize))
+		local reason = ("%s with %s: %s"):format(if request.fights then "z-fight" else "z-gap", table.concat(against, ", "), action)
+		local s = request.solid
+		Plan.add(plan, Plan.item(part, "zfight", reason, toCFrame, toSize, s.cf, s.size))
+	end
+
+	-- A mover up against another mover waits for that one's plan, so it
+	-- clears the other's new place (two crossing stripes). Movers that wait
+	-- on each other in a ring go as things stand; the next scan sees the rest.
+	local function waiting(part)
+		for _, entry in requests[part].entries do
+			local r = requests[entry.other.part]
+			if r and not r.done then
+				return true
+			end
+		end
+		return false
+	end
+	local pending = order
+	while #pending > 0 do
+		local rest = {}
+		for _, part in pending do
+			if waiting(part) then
+				table.insert(rest, part)
+			else
+				resolve(part)
+			end
+		end
+		if #rest == #pending then
+			resolve(table.remove(rest, 1))
+		end
+		pending = rest
 	end
 	return unfixable
 end

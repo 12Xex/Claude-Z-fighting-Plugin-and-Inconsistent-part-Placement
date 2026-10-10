@@ -5,19 +5,23 @@
 	  * Triangles: when the world can read a MeshPart's mesh (EditableMesh in
 	    Studio, for meshes the place's owner can load), every triangle becomes
 	    a face, so the z-fight check tests the real surface. Meshes it can't
-	    read, meshes over meshTriangleLimit triangles and unions (no readable
-	    geometry) are only checked by box; `coverage` counts them and says why.
+	    read, meshes over meshTriangleLimit triangles, unions (no readable
+	    geometry) and parts drawn by a SpecialMesh/BlockMesh/CylinderMesh
+	    child are only checked by box; `coverage` counts them and says why,
+	    and keeps the world's notes on a mesh (coverage.notes, by path).
 	  * Duplicates: two visible parts of the same class, mesh (or shape),
 	    position, rotation and size. The classic double import. Any class.
 	  * Box overlap: two meshes or unions whose boxes line up and share most
 	    of their volume (meshOverlapRatio). Only a warning: the surfaces inside
 	    the boxes may differ, so someone has to look.
 
-	Winding: Roblox doesn't document which way a mesh triangle faces, so each
-	mesh is judged on its own. A closed mesh whose triangles wind
-	counter-clockwise seen from outside has a positive signed volume (the sum
-	of a . (b x c) over its triangles); a negative one means every normal
-	flips.
+	Winding: a triangle faces the way its corners wind counter-clockwise
+	(Roblox's front face). A closed mesh (every edge shared by exactly two
+	triangles) wound the other way throughout has a negative signed volume
+	(the sum of a . (b x c) over its triangles), so its normals flip. An open
+	mesh (a ground patch, a pit's bowl) keeps the winding it was made with:
+	its volume says nothing about which way it faces. A DoubleSided mesh is
+	drawn both ways, so each triangle faces both ways.
 ]]
 
 local Util = require(script.Parent.Parent.Util)
@@ -31,13 +35,15 @@ local COS_ONE_DEGREE = math.cos(math.rad(1))
 local MIN_TRIANGLE_AREA = 1e-6
 
 Meshes.UNION_REASON = "unions have no readable geometry"
+Meshes.MESH_CHILD_REASON = "drawn by a SpecialMesh, BlockMesh or CylinderMesh child"
 
 --------------------------------------------------------------------------------
 -- Coverage: which meshes were checked by triangles and which by box only
 --------------------------------------------------------------------------------
 
+-- notes: part path -> what the world noticed about its mesh.
 function Meshes.newCoverage()
-	return { meshTriangles = 0, meshBoxOnly = 0, reasons = {} }
+	return { meshTriangles = 0, meshBoxOnly = 0, reasons = {}, notes = {} }
 end
 
 local function boxOnly(coverage, reason)
@@ -67,6 +73,16 @@ function Meshes.describeCoverage(coverage)
 	return text
 end
 
+-- The notes as "path: note" lines, sorted by path (empty when none).
+function Meshes.describeNotes(coverage)
+	local lines = {}
+	for path, note in (coverage and coverage.notes) or {} do
+		table.insert(lines, ("%s: %s"):format(path, note))
+	end
+	table.sort(lines)
+	return lines
+end
+
 --------------------------------------------------------------------------------
 -- Triangles
 --------------------------------------------------------------------------------
@@ -86,10 +102,65 @@ function Meshes.signedVolume(triangles)
 	return sum
 end
 
--- World-space faces, one per triangle, for part-local `triangles` placed at
--- `cf`: { name = "tri", triangle = true, normal, points, center }.
-function Meshes.triangleFaces(triangles, cf)
-	local sign = if Meshes.signedVolume(triangles) < 0 then -1 else 1
+-- Is the mesh closed: every edge shared by exactly two triangles? Corners
+-- are matched by position (to 1e-4 studs), since a mesh repeats a corner
+-- where its UVs split.
+function Meshes.isClosed(triangles)
+	local ids, count = {}, 0
+	local function id(p)
+		local key = ("%d,%d,%d"):format(math.round(p.X * 1e4), math.round(p.Y * 1e4), math.round(p.Z * 1e4))
+		local found = ids[key]
+		if not found then
+			count += 1
+			found = count
+			ids[key] = found
+		end
+		return found
+	end
+	local edges = {}
+	for _, t in triangles do
+		local a, b, c = corners(t)
+		local ia, ib, ic = id(a), id(b), id(c)
+		for _, e in { { ia, ib }, { ib, ic }, { ic, ia } } do
+			local key = math.min(e[1], e[2]) * 2 ^ 26 + math.max(e[1], e[2])
+			edges[key] = (edges[key] or 0) + 1
+		end
+	end
+	for _, n in edges do
+		if n ~= 2 then
+			return false
+		end
+	end
+	return next(edges) ~= nil
+end
+
+-- 1 when the triangles face the way they wind, -1 when a closed mesh is
+-- wound inside out (see Winding above).
+local function windingSign(triangles)
+	local volume = Meshes.signedVolume(triangles)
+	if volume >= 0 then
+		return 1
+	end
+	-- A flat sheet made of two back-to-back layers is closed but encloses
+	-- nothing: only a volume clearly above rounding counts.
+	local lo, hi = Vector3.one * math.huge, -Vector3.one * math.huge
+	for _, t in triangles do
+		local a, b, c = corners(t)
+		lo, hi = lo:Min(a):Min(b):Min(c), hi:Max(a):Max(b):Max(c)
+	end
+	local extent = hi - lo
+	local size = math.max(extent.X, extent.Y, extent.Z)
+	if -volume <= 1e-4 * size ^ 3 or not Meshes.isClosed(triangles) then
+		return 1
+	end
+	return -1
+end
+
+-- World-space faces, one per triangle (two, facing both ways, when
+-- `doubleSided`), for part-local `triangles` placed at `cf`:
+-- { name = "tri", triangle = true, normal, points, center }.
+function Meshes.triangleFaces(triangles, cf, doubleSided)
+	local sign = windingSign(triangles)
 	local faces = {}
 	for _, t in triangles do
 		local la, lb, lc = corners(t)
@@ -97,13 +168,12 @@ function Meshes.triangleFaces(triangles, cf)
 		local cross = (b - a):Cross(c - a)
 		local length = cross.Magnitude
 		if length / 2 >= MIN_TRIANGLE_AREA then
-			table.insert(faces, {
-				name = "tri",
-				triangle = true,
-				normal = cross * (sign / length),
-				points = { a, b, c },
-				center = (a + b + c) / 3,
-			})
+			local normal = cross * (sign / length)
+			local points, center = { a, b, c }, (a + b + c) / 3
+			table.insert(faces, { name = "tri", triangle = true, normal = normal, points = points, center = center })
+			if doubleSided then
+				table.insert(faces, { name = "tri", triangle = true, normal = -normal, points = points, center = center })
+			end
 		end
 	end
 	return faces
@@ -114,7 +184,10 @@ end
 -- the caller keeps the result.
 function Meshes.load(ctx, s, coverage)
 	local part = s.part
-	if not part:IsA("MeshPart") then
+	if Geometry.meshChild(part) then
+		boxOnly(coverage, Meshes.MESH_CHILD_REASON)
+		return nil
+	elseif not part:IsA("MeshPart") then
 		boxOnly(coverage, Meshes.UNION_REASON)
 		return nil
 	end
@@ -128,10 +201,13 @@ function Meshes.load(ctx, s, coverage)
 		return nil
 	end
 	-- Reading a mesh can wait on the network in Studio.
-	local ok, triangles, reason = pcall(world.meshTriangles, part)
+	local ok, triangles, reason, note = pcall(world.meshTriangles, part)
 	ctx.yield()
 	if not ok then
 		triangles, reason = nil, "reading the mesh failed"
+	end
+	if ok and note then
+		coverage.notes[ctx.path(part)] = note
 	end
 	if not triangles then
 		boxOnly(coverage, reason or "mesh not readable")
@@ -142,7 +218,7 @@ function Meshes.load(ctx, s, coverage)
 		return nil
 	end
 	coverage.meshTriangles += 1
-	return Meshes.triangleFaces(triangles, s.cf)
+	return Meshes.triangleFaces(triangles, s.cf, Util.prop(part, "DoubleSided", false) == true)
 end
 
 --------------------------------------------------------------------------------
@@ -150,15 +226,28 @@ end
 --------------------------------------------------------------------------------
 
 -- What makes two parts of one class the same shape: the mesh for a MeshPart,
--- the shape for a Part, nothing more for other classes.
+-- the shape for a Part, nothing more for other classes; plus the mesh child
+-- that draws it, if any.
 function Meshes.identity(part)
+	local identity = ""
 	if part:IsA("MeshPart") then
-		return "mesh " .. tostring(Util.prop(part, "MeshId", ""))
+		identity = "mesh " .. tostring(Util.prop(part, "MeshId", ""))
 	elseif part:IsA("Part") then
 		local shape = Util.prop(part, "Shape")
-		return "shape " .. (if shape then shape.Name else "Block")
+		identity = "shape " .. (if shape then shape.Name else "Block")
 	end
-	return ""
+	local child = Geometry.meshChild(part)
+	if child then
+		identity ..= (" drawn by %s %s %s %s %s %s"):format(
+			child.ClassName,
+			tostring(Util.prop(child, "MeshType", "")),
+			tostring(Util.prop(child, "MeshId", "")),
+			tostring(Util.prop(child, "TextureId", "")),
+			tostring(child.Scale),
+			tostring(child.Offset)
+		)
+	end
+	return identity
 end
 
 -- Do two parts look the same (colour, material, transparency, texture)?

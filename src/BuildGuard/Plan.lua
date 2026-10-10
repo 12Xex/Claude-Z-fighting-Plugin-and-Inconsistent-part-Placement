@@ -16,14 +16,17 @@ function Plan.new()
 	return { items = {}, byPart = {}, deferred = 0 }
 end
 
-function Plan.item(part, check, reason, toCFrame, toSize)
+-- `fromCFrame`/`fromSize` (default: the part as it is now) are what the
+-- plan was worked out from. Pass a scan's snapshot of the part, so applying
+-- refuses (stale plan) if the part was edited after that scan.
+function Plan.item(part, check, reason, toCFrame, toSize, fromCFrame, fromSize)
 	return {
 		part = part,
 		check = check,
 		reason = reason,
-		fromCFrame = part.CFrame,
+		fromCFrame = fromCFrame or part.CFrame,
 		toCFrame = toCFrame or part.CFrame,
-		fromSize = part.Size,
+		fromSize = fromSize or part.Size,
 		toSize = toSize or part.Size,
 	}
 end

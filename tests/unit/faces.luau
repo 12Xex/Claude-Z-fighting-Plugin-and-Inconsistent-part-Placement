@@ -1,5 +1,6 @@
 -- Faces: round surfaces, corner wedges, duplicates, mesh boxes, mesh
--- triangles, far-view face gaps, and contact positions in messages.
+-- triangles, far-view face gaps, contact positions in messages, float
+-- rounding far from the origin, and yielding during long scans.
 local T = require("../lib")
 local roblox, BG, D = T.roblox, T.BG, T.D
 local Instance, Vector3, CFrame, Enum = roblox.Instance, roblox.Vector3, roblox.CFrame, roblox.Enum
@@ -250,6 +251,61 @@ test("a trim flush on a wedge's bottom, back and slope can't be moved clear: rep
 	expect(#plan.items == 0 and #unfixed == 1 and unfixed[1] == z[1], BG.Plan.describe(plan))
 end)
 
+test("a marking flush on a sunk road moves with the road's snap, not into the road", function()
+	local root, world, part = setup()
+	local road = part("Road_Main", Vector3.new(22, 0.8, 60), CFrame.new(0, 0.2, 0))
+	local marking = part("LaneMarking", Vector3.new(0.5, 0.2, 40), CFrame.new(0, 0.5, 0)) -- top flush with the road's
+	local report = BG.scan(root, { world = world })
+	expect(#checks(report, "offground") == 1 and #checks(report, "zfight") == 1, BG.format(report))
+	BG.apply((BG.planFixes(report)))
+	local roadTop = road.CFrame.Position.Y + 0.4
+	near(road.CFrame.Position.Y - 0.4, D.roadLift, 1e-4, "road snapped up")
+	near(marking.CFrame.Position.Y + 0.1 - roadTop, D.zFightNudge, 1e-4, "marking top clears the snapped road top")
+	report = BG.scan(root, { world = world })
+	expect(report.counts.error == 0 and report.counts.warning == 0, BG.format(report))
+end)
+
+test("crossing stripes inlaid in a deck: one plan clears all three pairs", function()
+	local root, world, part = setup()
+	part("Deck", Vector3.new(40, 1, 40), CFrame.new(0, 0.5, 0))
+	part("StripeA", Vector3.new(30, 0.1, 1), CFrame.new(0, 0.95, 0))
+	part("StripeB", Vector3.new(1, 0.1, 20), CFrame.new(0, 0.95, 0))
+	local report = BG.scan(root, { world = world })
+	expect(#checks(report, "zfight") == 3, BG.format(report))
+	BG.apply((BG.planFixes(report)))
+	report = BG.scan(root, { world = world })
+	expect(#checks(report, "zfight") == 0, BG.format(report))
+end)
+
+test("a plan made from a scan older than a hand edit is refused, not applied over the edit", function()
+	local root, world, part = setup()
+	part("Wall", Vector3.new(10, 10, 1), CFrame.new(0, 5, 0))
+	local sign = part("Sign", Vector3.new(2, 2, 0.4), CFrame.new(0, 6, -0.3))
+	local report = BG.scan(root, { world = world })
+	sign.CFrame = CFrame.new(3, 6, -0.6) -- fixed by hand after the scan
+	local plan = BG.planFixes(report)
+	expect(not pcall(BG.apply, plan), "apply must refuse a plan from an old scan")
+	near((sign.CFrame.Position - Vector3.new(3, 6, -0.6)).Magnitude, 0, 1e-5, "the hand edit stays")
+end)
+
+test("a z-fight between two locked parts says so and isn't offered as an automatic fix", function()
+	local root, world, part = setup()
+	local wall = part("Wall", Vector3.new(10, 10, 1), CFrame.new(0, 5, 0))
+	local sign = part("Sign", Vector3.new(2, 2, 0.4), CFrame.new(0, 5, -0.3))
+	wall.Locked, sign.Locked = true, true
+	local report = BG.scan(root, { world = world })
+	local z = checks(report, "zfight")
+	expect(#z == 1 and not BG.isFixable(z[1]), BG.format(report))
+	expect(string.find(z[1].message, "both parts are locked", 1, true), z[1].message)
+	expect(string.find(BG.format(report), "(not auto-fixable)", 1, true), BG.format(report))
+	local plan, unfixed = BG.planFixes(report)
+	expect(#plan.items == 0 and #unfixed == 1)
+	-- Control: with one part unlocked, the other one moves.
+	sign.Locked = false
+	z = checks(BG.scan(root, { world = world }), "zfight")
+	expect(#z == 1 and BG.isFixable(z[1]) and not string.find(z[1].message, "locked", 1, true), z[1].message)
+end)
+
 T.section("Duplicates and mesh boxes")
 
 test("duplicates: same mesh or block, pose and size; each copy reported once, never as a z-fight", function()
@@ -433,6 +489,91 @@ test("coverage counts meshes checked by triangles and by box only, with reasons"
 	expect(Meshes.describeCoverage(BG.newContext(nil, { world = world }).coverage) == nil)
 end)
 
+-- An open mesh: a 20 x 20 floor at local y = -0.5 (wound to face down when
+-- `facingDown`, else up), plus a closed 1-stud rock standing on it.
+local function floorTriangles(facingDown)
+	local a, b, c, d = Vector3.new(-10, -0.5, -10), Vector3.new(-10, -0.5, 10), Vector3.new(10, -0.5, 10), Vector3.new(10, -0.5, -10)
+	local out = if facingDown then { { a, c, b }, { a, d, c } } else { { a, b, c }, { a, c, d } }
+	for _, t in boxTriangles(Vector3.one) do
+		local offset = Vector3.new(5, 0, 5)
+		table.insert(out, { t[1] + offset, t[2] + offset, t[3] + offset })
+	end
+	return out
+end
+
+test("an open mesh keeps its own winding: a crate on a ground patch is fine, a slab flush with it isn't", function()
+	local root, world, part = setup()
+	local patch = mesh(root, "GroundPatch", Vector3.new(20, 1, 20), CFrame.new(0, 10.5, 0))
+	world.setMeshTriangles(patch, floorTriangles(false))
+	expect(Meshes.signedVolume(floorTriangles(false)) < 0, "the floor sits below the centre: its volume is negative")
+	local crate = part("Crate", Vector3.new(4, 4, 4), CFrame.new(-5, 12, -3)) -- resting on the floor
+	local slab = part("Slab", Vector3.new(4, 1, 4), CFrame.new(-5, 9.5, 4)) -- top flush with the floor
+	local report = BG.scan(root, { world = world })
+	local z = checks(report, "zfight")
+	expect(not involves(z, patch, crate), BG.format(report))
+	expect(#z == 1 and involves(z, patch, slab), BG.format(report))
+
+	-- Wound to face down, the floor is seen from below only: the slab's top shows.
+	world.setMeshTriangles(patch, floorTriangles(true))
+	report = BG.scan(root, { world = world })
+	expect(not involves(checks(report, "zfight"), patch, slab), BG.format(report))
+	-- DoubleSided draws it both ways.
+	patch.DoubleSided = true
+	report = BG.scan(root, { world = world })
+	expect(involves(checks(report, "zfight"), patch, slab), BG.format(report))
+end)
+
+test("parts drawn by a SpecialMesh or a scaled BlockMesh are checked by box only", function()
+	local root, world, part = setup()
+	local function special(p, meshId)
+		local m = Instance.new("SpecialMesh")
+		m.MeshType = Enum.MeshType.FileMesh
+		m.MeshId = meshId
+		m.Parent = p
+		return p
+	end
+	-- Two different lamp meshes sharing a box: not a "delete one" duplicate.
+	local post = special(part("LampPost", Vector3.new(2, 8, 2), CFrame.new(0, 4, 0)), "rbxassetid://111")
+	local head = special(part("LampHead", Vector3.new(2, 8, 2), CFrame.new(0, 4, 0)), "rbxassetid://222")
+	-- A half-scale BlockMesh: its box front is on the wall front, but what's drawn is inside the wall.
+	part("Wall", Vector3.new(10, 10, 1), CFrame.new(20, 5, 0))
+	local plaque = part("Plaque", Vector3.new(2, 2, 0.4), CFrame.new(20, 5, -0.3))
+	local block = Instance.new("BlockMesh")
+	block.Scale = Vector3.new(0.5, 0.5, 0.5)
+	block.Parent = plaque
+	-- Controls: the same lamp mesh twice is a duplicate; a plain BlockMesh draws its box.
+	local copyA = special(part("Lamp", Vector3.new(2, 8, 2), CFrame.new(40, 4, 0)), "rbxassetid://111")
+	local copyB = special(part("Lamp", Vector3.new(2, 8, 2), CFrame.new(40, 4, 0)), "rbxassetid://111")
+	local plain = part("PlainPlaque", Vector3.new(2, 2, 0.4), CFrame.new(23, 5, -0.3))
+	Instance.new("BlockMesh").Parent = plain
+
+	local report = BG.scan(root, { world = world })
+	local dups = checks(report, "duplicate")
+	expect(#dups == 1 and involves(dups, copyA, copyB), BG.format(report))
+	local z = checks(report, "zfight")
+	expect(not involves(z, post, head) and not involves(z, plaque), BG.format(report))
+	expect(involves(z, plain), "a plain BlockMesh still z-fights by its box")
+	expect(involves(checks(report, "meshoverlap"), post, head), "the lamps' boxes are flagged for a look")
+	expect(report.coverage.reasons[Meshes.MESH_CHILD_REASON] == 5, BG.format(report))
+end)
+
+test("a mesh's note (data not centred on its bounds) is kept in the coverage with the part's path", function()
+	local root, world = setup()
+	local rock = mesh(root, "Rock", Vector3.new(2, 2, 2), CFrame.new(0, 1, 0))
+	local note = "mesh data isn't centred on its bounds (off by (0.000, 0.500, 0.000) studs), so its box doesn't match what you see"
+	world.meshTriangles = function(p)
+		if p == rock then
+			return boxTriangles(p.Size), nil, note
+		end
+		return nil, "mesh not loadable"
+	end
+	local report = BG.scan(root, { world = world })
+	expect(report.coverage.meshTriangles == 1, BG.format(report))
+	expect(report.coverage.notes["Workspace/Rock"] == note, "note kept")
+	local lines = Meshes.describeNotes(report.coverage)
+	expect(#lines == 1 and lines[1] == "Workspace/Rock: " .. note, lines[1])
+end)
+
 T.section("Messages")
 
 test("z-fight messages give the path (with #n for repeated names) and where to look", function()
@@ -490,6 +631,49 @@ test("far view: 0.02 off a wall is a zgap in a model seen from 300 studs, fixed 
 	expect(#checks(report, "zgap") == 0 and #checks(report, "zfight") == 0, BG.format(report))
 end)
 
+test("far view: a zgap fix keeps which surface is in front", function()
+	local root, world, part = setup()
+	local pit = model(root, "Pit", { BuildGuard_zFightViewDistance = FAR })
+	local gap = BG.Config.faceGap(BG.Config.merge({ zFightViewDistance = FAR }))
+	-- A neon bulb 0.05 inside a glass globe.
+	local globe = shaped(part("Globe", Vector3.new(4.1, 4.1, 4.1), CFrame.new(0, 8, 0), pit), "Ball")
+	globe.Material, globe.Transparency = Enum.Material.Glass, 0.5
+	local bulb = shaped(part("Bulb", Vector3.new(4, 4, 4), CFrame.new(0, 8, 0), pit), "Ball")
+	bulb.Material = Enum.Material.Neon
+	-- A panel whose front sits 0.03 behind the wall's front (hidden).
+	part("Wall", Vector3.new(10, 10, 1), CFrame.new(20, 5, 0), pit)
+	local panel = part("Panel", Vector3.new(2, 2, 0.4), CFrame.new(20, 5, -0.27), pit)
+	local report = BG.scan(root, { world = world })
+	local gaps = checks(report, "zgap")
+	expect(#gaps == 2 and involves(gaps, bulb) and involves(gaps, panel), BG.format(report))
+	local plan = BG.planFixes(report)
+	expect(#plan.items == 2, BG.Plan.describe(plan))
+	for _, item in plan.items do
+		expect(string.find(item.reason, "z-gap with", 1, true), item.reason)
+		local action = if item.part == bulb then "shrink its round surface clear" else "nudge further back"
+		expect(string.find(item.reason, action, 1, true), item.reason)
+	end
+	BG.apply(plan)
+	near(globe.Size.X / 2 - bulb.Size.X / 2, gap, 1e-4, "the bulb stays inside the globe, by the face gap")
+	near(globe.Size.X, 4.1, 1e-5, "globe untouched")
+	near((panel.CFrame.Position.Z - 0.2) - -0.5, gap, 1e-4, "the panel stays behind the wall's front, by the face gap")
+	report = BG.scan(root, { world = world })
+	expect(#checks(report, "zgap") == 0 and #checks(report, "zfight") == 0, BG.format(report))
+end)
+
+test("far view under about 130 studs adds no zgap warnings: the normal nudge already holds there", function()
+	local root, world, part = setup()
+	local yard = model(root, "Yard", { BuildGuard_zFightViewDistance = 60 })
+	part("Wall", Vector3.new(10, 10, 1), CFrame.new(0, 5, 0), yard)
+	part("Sign", Vector3.new(2, 2, 0.4), CFrame.new(0, 5, -0.315), yard) -- 0.015 off the wall
+	local report = BG.scan(root, { world = world })
+	expect(#checks(report, "zgap") == 0 and #checks(report, "zfight") == 0, BG.format(report))
+	-- Control: at 120 studs 0.015 isn't enough any more.
+	yard:SetAttribute("BuildGuard_zFightViewDistance", 120)
+	report = BG.scan(root, { world = world })
+	expect(#checks(report, "zgap") == 1, BG.format(report))
+end)
+
 test("far view: layers lift by the face gap", function()
 	local root, world, part = setup()
 	local pit = model(root, "Pit", { BuildGuard_zFightViewDistance = FAR })
@@ -505,4 +689,71 @@ test("far view: layers lift by the face gap", function()
 	local outside = part("Slab", Vector3.new(20, 1, 10), CFrame.new(0, 0.55, 40))
 	local mark = BG.Layers.place(part("Mark", Vector3.new(4, 0.1, 0.5), CFrame.new()), outside, { layer = 1 })
 	near(mark.CFrame.Position.Y - 0.05, 1.05 + D.layerLift, 1e-4, "outside: layerLift")
+end)
+
+T.section("Float rounding")
+
+test("parts laid edge to edge far from the origin don't z-fight along the shared edge", function()
+	-- float32 positions put each shared edge about 1e-4 studs to one side.
+	for _, at in { 2000, 4000, 8000 } do
+		local root, world, part = setup()
+		for i = 0, 5 do
+			part("Paver", Vector3.new(21.7, 1, 512), CFrame.new(at + 0.37 + i * 21.7, 10, -at))
+			part("Kerb", Vector3.new(18.45, 1, 512), CFrame.new(at + 0.37 + i * 18.45, 10, at))
+		end
+		local frame = CFrame.new(-at, 10, at) * CFrame.Angles(0, math.rad(37), 0)
+		for i = 0, 5 do
+			part("Slab", Vector3.new(22, 1, 512), frame * CFrame.new(22 * i, 0, 0))
+		end
+		local report = BG.scan(root, { world = world })
+		expect(#checks(report, "zfight") == 0, BG.format(report))
+	end
+	-- Control: a real 0.05 overlap along the same kind of edge still z-fights.
+	local root, world, part = setup()
+	part("Paver", Vector3.new(21.7, 1, 512), CFrame.new(4000, 10, -4000))
+	part("Paver", Vector3.new(21.7, 1, 512), CFrame.new(4000 + 21.7 - 0.05, 10, -4000))
+	local report = BG.scan(root, { world = world })
+	local z = checks(report, "zfight")
+	expect(#z == 1 and string.find(z[1].message, "Top/Top", 1, true), BG.format(report))
+	for _, c in z[1].contacts do
+		if c.faceA.name == "Top" then
+			near(c.area, 0.05 * 512, 0.5, "the whole 0.05-wide strip (float32 positions)")
+		end
+	end
+end)
+
+T.section("Yielding")
+
+-- Runs a scan where it can yield and counts the yields made in each stage.
+local function yieldsPerStage(root, world)
+	local stage, counts = nil, {}
+	world.yield = function()
+		counts[stage] = (counts[stage] or 0) + 1
+	end
+	coroutine.wrap(function()
+		BG.scan(root, {
+			world = world,
+			onProgress = function(name)
+				stage = name
+			end,
+		})
+	end)()
+	return counts
+end
+
+test("long z-fight work yields as it goes: one slab under hundreds of crates, two big meshes", function()
+	local root, world, part = setup()
+	for i = 0, 399 do
+		part("Crate", Vector3.one, CFrame.new(-100 + (i % 20) * 3, 0.5, -100 + math.floor(i / 20) * 3))
+	end
+	local counts = yieldsPerStage(root, world)
+	expect((counts.zfight or 0) >= 20, ("only %d yield(s) while checking the slab against 400 crates"):format(counts.zfight or 0))
+
+	root, world = setup()
+	local a = mesh(root, "BigA", Vector3.new(10, 10, 10), CFrame.new(0, 20, 0), "rbxassetid://20")
+	local b = mesh(root, "BigB", Vector3.new(10, 10, 10), CFrame.new(0, 20, 0), "rbxassetid://21")
+	world.setMeshTriangles(a, boxTriangles(a.Size, false, 13))
+	world.setMeshTriangles(b, boxTriangles(b.Size, false, 12))
+	counts = yieldsPerStage(root, world)
+	expect((counts.zfight or 0) >= 20, ("only %d yield(s) while checking one pair of big meshes"):format(counts.zfight or 0))
 end)

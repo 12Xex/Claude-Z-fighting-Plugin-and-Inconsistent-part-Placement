@@ -59,9 +59,21 @@ function Geometry.shapeOf(part)
 	return "Other"
 end
 
--- Meshes and unions: parts whose real surface isn't known from Size alone.
+-- The SpecialMesh, BlockMesh or CylinderMesh child that draws a part in
+-- place of its own shape, or nil. A BlockMesh at its default scale and
+-- offset draws the part's box, so it doesn't count.
+function Geometry.meshChild(part)
+	local mesh = part:FindFirstChildWhichIsA("DataModelMesh")
+	if mesh and mesh:IsA("BlockMesh") and mesh.Scale == Vector3.one and mesh.Offset == Vector3.zero then
+		return nil
+	end
+	return mesh
+end
+
+-- Meshes, unions and parts drawn by a mesh child: parts whose real surface
+-- isn't known from Size alone.
 function Geometry.isMeshLike(part)
-	return part:IsA("MeshPart") or part:IsA("PartOperation")
+	return part:IsA("MeshPart") or part:IsA("PartOperation") or Geometry.meshChild(part) ~= nil
 end
 
 -- A snapshot of a part's box. Fixes change parts, so take fresh solids after.
@@ -336,10 +348,18 @@ local function polygonCentroid(poly)
 	return cx / (3 * area), cy / (3 * area)
 end
 
+-- Overlaps thinner than this (studs) are float rounding along a shared edge.
+local MIN_OVERLAP_WIDTH = 1e-3
+-- Part positions are float32: about 4 rounding steps of a coordinate this big.
+local FLOAT_STEPS = 4 * 2 ^ -23
+
 -- If faces `fa` and `fb` point the same way, lie within `tolerance` of each
 -- other and overlap, returns (overlapArea, distance, centroid) where distance
 -- is how far fb's plane sits in front of fa's along fa's normal and centroid
 -- is the middle of the overlap (on fa's plane). Otherwise nil.
+-- Faces laid edge to edge far from the origin overlap by a float-rounding
+-- sliver (about 1e-4 studs wide). That never flickers, so an overlap that
+-- moving a face by less than MIN_OVERLAP_WIDTH would clear doesn't count.
 function Geometry.coplanarOverlap(fa, fb, tolerance, minArea)
 	if fa.normal:Dot(fb.normal) < 1 - 1e-4 then
 		return nil
@@ -349,12 +369,18 @@ function Geometry.coplanarOverlap(fa, fb, tolerance, minArea)
 		return nil
 	end
 	local u, v = planeBasis(fa.normal)
-	local clipped = Geometry.clipPolygon(project(fb.points, fa.center, u, v), project(fa.points, fa.center, u, v))
+	local pa, pb = project(fa.points, fa.center, u, v), project(fb.points, fa.center, u, v)
+	local clipped = Geometry.clipPolygon(pb, pa)
 	if #clipped < 3 then
 		return nil
 	end
 	local area = Geometry.polygonArea(clipped)
 	if area < minArea then
+		return nil
+	end
+	local c = fa.center
+	local thin = math.max(MIN_OVERLAP_WIDTH, FLOAT_STEPS * math.max(math.abs(c.X), math.abs(c.Y), math.abs(c.Z)))
+	if Geometry.polygonSeparation(pa, pb) > -thin then
 		return nil
 	end
 	local cx, cy = polygonCentroid(clipped)
