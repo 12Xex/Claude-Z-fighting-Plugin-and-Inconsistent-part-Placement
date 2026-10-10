@@ -197,6 +197,14 @@ end
 
 -- Today's date as YYYY-MM-DD (UTC), or nil where there's no clock.
 function Util.today()
+	if DateTime then
+		local ok, text = pcall(function()
+			return DateTime.now():FormatUniversalTime("YYYY-MM-DD", "en-us")
+		end)
+		if ok then
+			return text
+		end
+	end
 	if os and os.date then
 		local ok, text = pcall(os.date, "!%Y-%m-%d")
 		if ok then

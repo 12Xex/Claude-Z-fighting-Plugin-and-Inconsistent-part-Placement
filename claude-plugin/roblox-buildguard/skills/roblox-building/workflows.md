@@ -8,18 +8,21 @@ local BG = require(game.ServerStorage.BuildGuard)
 
 ## Every session
 
-1. Run the check from SKILL.md step 0 (installed, and version `"0.5.0"`).
+1. Run the check from SKILL.md step 0 (installed, and version `"0.6.0"`).
 2. Find where things go. Print the top level of `workspace` and the model you'll work in, so you build into the user's existing structure:
    ```lua
    for _, c in workspace:GetChildren() do print(c.ClassName, c:GetFullName()) end
    ```
 3. Put each new thing in its own named `Model` (`HaulRoad_North`, `Town_Shop1`, `MineTunnel_A`). Checks, settings and the user's Ctrl+Z all work per model.
 4. Build in a few `run_code` calls per model, not one call per part. Print what each call made.
+5. Check the place-wide numbers once: `print(BG.explainConfig(workspace))`. If `roadHeadroom` is 0 and the game has trucks, measure the truck (Vehicles below) and propose `BG.setProjectConfig({ roadHeadroom = ... }, reason)` to the user.
 
 ## Fixing: your build vs. the user's
 
 - **Your own new model:** you may run `BG.fixAll(model)` after reading `BG.check(model)`.
 - **Anything the user already built:** run `BG.check` only. Show them the report and fix preview, and apply fixes only after they say yes. Every apply is one Ctrl+Z step in Studio.
+- **A model a script builds:** after `fixAll`, print `BG.formatChanges(result)` and put every change in the builder script (each line gives the `part.CFrame *= CFrame.new(...)` or `part.Size += Vector3.new(...)` to add to that part). Then rebuild and check again: a rebuild without them brings the problems back.
+- **A big area (a whole map):** `BG.check` can take longer than one call may wait. Use `local id = BG.startCheck(workspace.Map)`, then `print(BG.jobStatus(id))` in later calls until it says the report.
 
 ## Landscape and terrain
 
@@ -28,14 +31,14 @@ local BG = require(game.ServerStorage.BuildGuard)
 
 ## Roads
 
-1. Lay each piece flat with its top face up. Size it as length × 1 × width, with the width (at least 16) on the other horizontal axis. Name it `Road…`, and put it on the grid with `BG.snapToGrid`:
+1. Lay each piece flat with its top face up. Size it as length × 0.8 × width, with the width (at least 22) on the other horizontal axis. The 0.8 thickness keeps the step from the ground onto the road (thickness + 0.1 lift) under the 1-stud limit. Name it so its first word is `Road` (`Road_01`, `Road_North_3`), and put it on the grid with `BG.snapToGrid`:
    ```lua
    local roads = Instance.new("Model")
    roads.Name = "HaulRoad_North"
    local function road(name, length, cf)
    	local p = Instance.new("Part")
    	p.Name = name
-   	p.Size = Vector3.new(length, 1, 16)
+   	p.Size = Vector3.new(length, 0.8, 22)
    	p.CFrame = BG.snapToGrid(cf)
    	p.Anchored = true
    	p.Material = Enum.Material.Asphalt
@@ -65,20 +68,20 @@ local BG = require(game.ServerStorage.BuildGuard)
    ```
    Change direction gradually: no more than 20° between neighbours, and no piece steeper than 20° overall. Use switchbacks for anything steeper.
 4. Markings go on with `BG.Layers.place` (see Details).
-5. Run `print(BG.check(roads))`. Ledge, slope, route slope and width warnings mean the layout needs changing; they have no automatic fix.
+5. Run `print(BG.check(roads))`. Ledge, edge, slope, route slope and width warnings mean the layout needs changing; they have no automatic fix. An `edge` warning means the ground beside the road is too far below (or above) its top: make the road thinner, or shape the terrain up to the road's edge.
 
 ## Rails and minecart tracks
 
-1. Track bed first (name it `Track…`), then snap it.
-2. Rails (`Rail…`, not `Railing`) and sleepers on top of the bed, then snap the rails. Rails land 0.2 above the bed, because the bed counts as their ground.
+1. Track bed first (first word `Track`: `TrackBed_01`), then snap it.
+2. Rails (first word `Rail`: `Rail_L_01`) and sleepers on top of the bed, then snap the rails. Rails land 0.2 above the bed, because the bed counts as their ground.
 3. Rail pieces have the same 20° slope and 1-stud join limits as roads, but no width check.
 
 ## Tunnels and caves
 
 1. Carve the tunnel in terrain (`FillBlock` with `Enum.Material.Air`), or build it from parts. Make sure it has a floor.
-2. Put the tunnel's roads and rails in one model, and set the headroom its vehicles need:
+2. Put the tunnel's roads and rails in one model. Road headroom normally comes from the place-wide setting (Every session, step 5). Set the minecart's rail headroom, or a different truck's, on the tunnel's model:
    ```lua
-   BG.setConfig(workspace.Map.MineTunnel_A, { roadHeadroom = 14, railHeadroom = 7 }, "13-stud haul truck, 6-stud minecart")
+   BG.setConfig(workspace.Map.MineTunnel_A, { railHeadroom = 7 }, "6-stud minecart")
    ```
    Get the numbers from `BG.checkVehicle` (Vehicles below), or ask the user. Don't guess.
 3. Snap the roads and rails. They land on the tunnel floor. A part buried more than 20 studs deep is skipped with a message; carve its space instead.
@@ -93,6 +96,7 @@ local BG = require(game.ServerStorage.BuildGuard)
 ## Town buildings
 
 1. Lay buildings out on the 4-stud grid (`BG.snapToGrid`) and keep them off roads and rails. Anything on a road is flagged as burying it.
+   A big floor slab or platform isn't ground unless it's tagged `BuildGuardGround`; tag only real ground (a slab roads and buildings stand on), never a roof.
 2. BuildGuard doesn't check buildings on uneven ground yet. Do it by hand: raycast the ground under each corner, and make the foundation reach below the lowest point, so no corner hovers:
    ```lua
    local function groundY(x, z)
@@ -115,21 +119,39 @@ local BG = require(game.ServerStorage.BuildGuard)
    ```
 2. The item's `Size.Y` is its thickness. Items that overlap on the same face need different layers and the same thickness.
 3. To lift details you've already placed by eye, keep where they are: `{ layer = 1, keepPosition = true }`.
+4. Details on map-sized models seen from far away (quarry walls, billboards across the pit): 0.02 gaps can flicker on phones beyond about 130 studs. When the user has checked the far-view rig (the plugin's **Far-view test**) and picked a distance, set it on the model: `BG.setConfig(model, { zFightViewDistance = 300 }, "seen across the pit")`. Checks then want bigger gaps there, and layers lift more.
+
+## Meshes (Blender imports)
+
+1. Import each mesh once. A second copy at the same position and size is a `duplicate` error; delete one.
+2. BuildGuard reads the triangles of meshes owned by the user or the game owner, and checks them for z-fighting like flat faces. Meshes it can't load (other creators' meshes) and unions are checked by their box only. The report's `Meshes:` line counts both; tell the user how many were box-only.
+3. `meshoverlap` warnings mean two meshes' boxes nearly coincide: usually a double import with a different mesh id, or an overlay mesh that will z-fight. Look at them and fix or explain.
+4. Detail meshes on a surface still go through `BG.Layers.place`.
 
 ## Vehicles (trucks, minecarts) with detailed parts
 
-1. Build the vehicle as one model. Set `PrimaryPart` to the chassis with the front facing -Z. Name the wheels `Wheel…`/`Tire…` (or set the `BuildGuardWheel` attribute).
-2. Detail parts (springs, struts, shocks, axles) are joined with Welds, Motor6Ds or attachment constraints. Don't leave them as loose anchored parts that only look attached.
-3. Check the details in edit mode, with the vehicle parked: `print(BG.check(truck))`. Fixes keep Welds and Motor6Ds in step.
-4. Measure it, and show the user every `FAIL` and `check` line:
+1. Build the vehicle as one model with a `VehicleSeat`. Set `PrimaryPart` to the chassis with the front facing -Z.
+2. Build it as a rig BuildGuard can read:
+   - each wheel spins on a HingeConstraint (or CylindricalConstraint) whose attachments sit at the wheel's centre, axis along the axle;
+   - steering: a HingeConstraint with `LimitsEnabled = true` and the lock in `LowerAngle`/`UpperAngle`. If a script drives a Servo without limits, set the lock on the truck: `BG.setConfig(truck, { steerLock = 33 }, "steering script turns 33°")`;
+   - suspension: a PrismaticConstraint or CylindricalConstraint with `LimitsEnabled = true` and the travel in `LowerLimit`/`UpperLimit` (or a SpringConstraint with `MinLength`/`MaxLength` beside it);
+   - detail parts (springs, struts, shocks, mirrors, arms) welded, not loose.
+3. Collision parts: every pair of colliding parts in different assemblies that overlap at rest is a `collision` error, invisible hull and floor boxes included. Fix each one by moving or shrinking a part, welding it, or adding a NoCollisionConstraint between the two. Visual-only parts (tyre meshes, arches, mirrors) should have `CanCollide = false`.
+4. Check it in edit mode, parked: `print(BG.check(truck))`. `wheelsweep` warnings say which part a wheel hits, and at what steering angle and suspension travel; give that part room. `[NOTE]` lines say what couldn't be swept (no limits set, or a rig that builds its joints at runtime).
+5. Measure it, and show the user every `FAIL` and `check` line:
    ```lua
    print((BG.checkVehicle(workspace.Vehicles.HaulTruck)))
    ```
-   Don't change the project's road limits yourself. Propose the change and let the user decide.
+   It measures two profiles: colliding parts for wheels, clearance, angles and ledges; visible parts for width (with mirrors) and height. Two trucks passing need 2 × the width with mirrors + 2. Don't change the project's road limits yourself. Propose the change and let the user decide.
+6. When the user has drive-tested a limit (a loaded truck over the 1-stud ledge, up the 20° climb), record it on the truck with what they said, so the row stops asking:
+   ```lua
+   BG.markTested(workspace.Vehicles.HaulTruck, "maxLedge", "drove the 1.0 ledge with a full bed")
+   ```
+   Only record tests the user actually did. A record stops counting if the limit is later raised above the tested value.
 
 ## NPCs
 
-1. Set `BuildGuardIgnore = true` on each character model. Accessories overlap on purpose, and BuildGuard doesn't check NPCs.
+1. Tag each character model `BuildGuardIgnore` (`model:AddTag("BuildGuardIgnore")`, or the attribute). Accessories overlap on purpose, and BuildGuard doesn't check NPCs. Tag label and helper folders the same way.
 2. Stand them on the ground by raycast. For R15 rigs, put the `HumanoidRootPart` centre at ground + `Humanoid.HipHeight` + half the root part's height, and move the model with `PivotTo`.
 3. Keep them off roads and rails unless the user asks.
 
@@ -138,10 +160,11 @@ local BG = require(game.ServerStorage.BuildGuard)
 After each model, tell the user:
 1. **What you built**, and where (full instance path).
 2. **The final check:** errors (must be 0) and warnings.
-3. **What was fixed automatically:** how many changes, and that Ctrl+Z undoes them.
+3. **What was fixed automatically:** how many changes, and that Ctrl+Z undoes them. For script-built models, that you put the fix report's changes in the script.
 4. **Every line under "Config overrides in effect":** what you changed and why.
-5. **Every warning left**, with the part names and what you suggest.
-6. **What isn't checked yet** that this build relied on: buildings on uneven ground, NPC footing, cave entrance width.
+5. **Every warning and note left**, with the part paths and what you suggest.
+6. **What was only partly checked:** meshes checked by box only (the `Meshes:` line).
+7. **What isn't checked yet** that this build relied on: buildings on uneven ground, NPC footing, cave entrance width.
 
 ## When something goes wrong
 
@@ -154,4 +177,11 @@ After each model, tell the user:
 | Snap skipped: `buried deeper than 20 studs` | Carve the space for it, or move it up yourself. |
 | Snap skipped: `tilted …, treated as a ramp` | Expected for ramps. Place them by their joints (Roads step 3). |
 | `buried … move the cover … by hand` | Something sits on the road/rail. Move it; don't move the road onto it. |
-| The check is slow or times out | Check one model at a time, not the whole `workspace`. |
+| The check is slow or times out | Use `BG.startCheck(root)` and poll `BG.jobStatus(id)`, or check one model at a time. The report's `Time:` line shows which check is slow. |
+| `Meshes: ... by their box only (no permission ...)` | Those meshes belong to another creator, so their triangles can't be read. Check them by eye, or re-upload them under the user's account. |
+| `duplicate` | A mesh or part imported twice at the same place. Delete one. |
+| `collision ... at rest` | Two colliding vehicle parts overlap. Move or shrink one, weld them, or add a NoCollisionConstraint. |
+| `wheelsweep` | A wheel hits that part at the angle/travel given. Move the part or reduce the lock/travel (with the user's OK). |
+| `edge` | The road's top is more than 1 stud above (or below) the ground beside it. Use 0.8-thick roads, or raise the terrain to the road. |
+| `zgap` | In a far-view model, same-facing faces are closer than the gap that holds at its view distance. Apply the fix. |
+| `no colliding wheels found` | The wheels don't spin on constraints and aren't named `Wheel_…`/`Tire_…`, or have `CanCollide` off. Tag them `BuildGuardWheel`. |

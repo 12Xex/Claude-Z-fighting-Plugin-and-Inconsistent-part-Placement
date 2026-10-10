@@ -1,7 +1,7 @@
 {
   "name": "roblox-buildguard",
   "description": "Makes Claude build in Roblox Studio without z-fighting, buried roads or bad road joins, and check every build with BuildGuard before calling it done",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "author": {
     "name": "12xex"
   },

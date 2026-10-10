@@ -35,7 +35,7 @@ local BuildGuard = {}
 
 -- Matches the Claude plugin's version; the skill checks it so an old copy in
 -- ServerStorage gets reinstalled.
-BuildGuard.VERSION = "0.5.0"
+BuildGuard.VERSION = "0.6.0"
 
 BuildGuard.Config = Config
 BuildGuard.Geometry = Geometry
@@ -333,29 +333,30 @@ function BuildGuard.planSnap(target, options)
 	return plan, skipped
 end
 
--- Runs `fn` as one undoable Studio action (if there's a Studio to undo in).
+-- Runs `fn` as one undoable Studio action (if there's a Studio to undo in)
+-- and returns what it returns. When a recording can't be opened (an MCP
+-- call or the command bar already records the whole call, or there's no
+-- plugin security), `fn` just runs and the caller's recording covers it.
 function BuildGuard.withUndo(name, fn)
 	local history = game and game:GetService("ChangeHistoryService")
-	if not history then
+	local ok, recording = false, nil
+	if history then
+		ok, recording = pcall(history.TryBeginRecording, history, name)
+	end
+	if not (ok and recording) then
 		return fn()
 	end
-	local ok, recording = pcall(history.TryBeginRecording, history, name)
-	if ok and recording then
-		local success, err = pcall(fn)
-		history:FinishRecording(
-			recording,
-			if success then Enum.FinishRecordingOperation.Commit else Enum.FinishRecordingOperation.Cancel
-		)
-		if not success then
-			error(err, 0)
-		end
-		return
+	local results = table.pack(pcall(fn))
+	pcall(
+		history.FinishRecording,
+		history,
+		recording,
+		if results[1] then Enum.FinishRecordingOperation.Commit else Enum.FinishRecordingOperation.Cancel
+	)
+	if not results[1] then
+		error(results[2], 0)
 	end
-	-- Outside a plugin (command bar, MCP run_code) recordings aren't allowed;
-	-- waypoints still give a single Ctrl+Z step.
-	history:SetWaypoint("Before " .. name)
-	fn()
-	history:SetWaypoint(name)
+	return table.unpack(results, 2, results.n)
 end
 
 -- Applies a plan as one undo step. Refuses if any part changed since the plan
@@ -664,8 +665,10 @@ end
 -- stays responsive; poll it with BG.jobStatus(id).
 --     local id = BG.startCheck(workspace.Map)
 --     print(BG.jobStatus(id))   -- "running: zfight (3/4 checks, 12.3s)" or the report
--- Jobs are kept as StringValues in ServerStorage.BuildGuardJobs (not saved
--- with the place), so any later call can read them. The last 5 are kept.
+-- Jobs are kept as StringValues in a BuildGuardJobs folder (in CoreGui when
+-- the caller may write there, else ServerStorage; never saved with the
+-- place), so any later call can read them. The last 5 are kept. A long
+-- report can be read a page at a time: BG.jobStatus(id, { page = 2 }).
 local MAX_JOBS = 5
 local MAX_TEXT = 190000
 local jobs = {}
@@ -678,15 +681,26 @@ local function jobFolder(options)
 	if not game then
 		return nil
 	end
-	local storage = game:GetService("ServerStorage")
-	local folder = storage:FindFirstChild("BuildGuardJobs")
-	if not folder then
-		folder = Instance.new("Folder")
-		folder.Name = "BuildGuardJobs"
-		folder.Archivable = false
-		folder.Parent = storage
+	-- CoreGui isn't part of the place, so job records stay out of undo
+	-- history; ServerStorage is the fallback when CoreGui is off limits.
+	for _, service in { "CoreGui", "ServerStorage" } do
+		local ok, folder = pcall(function()
+			local container = game:GetService(service)
+			local existing = container:FindFirstChild("BuildGuardJobs")
+			if existing then
+				return existing
+			end
+			local created = Instance.new("Folder")
+			created.Name = "BuildGuardJobs"
+			created.Archivable = false
+			created.Parent = container
+			return created
+		end)
+		if ok and folder then
+			return folder
+		end
 	end
-	return folder
+	return nil
 end
 
 local function newJobId()
@@ -766,20 +780,46 @@ function BuildGuard.startCheck(root, options)
 	return id
 end
 
+-- One page of a long text: lines (page - 1) * size + 1 .. page * size, with
+-- a "page n of m" line when there's more than one page.
+function BuildGuard.page(text, page, size)
+	size = size or 120
+	local lines = string.split(text, "\n")
+	local pages = math.max(1, math.ceil(#lines / size))
+	page = math.clamp(page or 1, 1, pages)
+	if pages == 1 then
+		return text
+	end
+	local out = {}
+	for i = (page - 1) * size + 1, math.min(page * size, #lines) do
+		table.insert(out, lines[i])
+	end
+	table.insert(out, ("(page %d of %d; ask for page = %d for more)"):format(page, pages, math.min(page + 1, pages)))
+	return table.concat(out, "\n")
+end
+
 -- Status of a started check: text, state ("running" | "done" | "failed" |
--- "unknown"). When done, the text is the full report and fix preview.
+-- "unknown"). When done, the text is the full report and fix preview, a
+-- page at a time if options.page is given (120 lines per page).
 function BuildGuard.jobStatus(id, options)
+	options = options or {}
 	local job = jobs[id]
 	local record = job and job.record
 	if not record then
-		local folder = jobFolder(options or {})
+		local folder = jobFolder(options)
 		record = folder and folder:FindFirstChild(id)
 	end
+	local function finished(text, state)
+		if options.page then
+			return BuildGuard.page(text, options.page), state
+		end
+		return text, state
+	end
 	if job and job.state ~= "running" then
-		return job.text, job.state
+		return finished(job.text, job.state)
 	end
 	if record and record:GetAttribute("State") ~= "running" then
-		return record.Value, record:GetAttribute("State")
+		return finished(record.Value, record:GetAttribute("State"))
 	end
 	if job or record then
 		local stage = if job then job.stage else record:GetAttribute("Stage")

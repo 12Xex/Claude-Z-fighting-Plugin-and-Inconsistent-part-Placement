@@ -402,3 +402,19 @@ test("setProjectConfig needs a place; find reverses paths", function()
 	local root = setup()
 	expect(BG.find(root, "Workspace/Ground") == root.Ground)
 end)
+
+test("long reports page; withUndo returns what the function returns", function()
+	local lines = {}
+	for i = 1, 300 do
+		lines[i] = "line " .. i
+	end
+	local text = table.concat(lines, "\n")
+	local p2 = BG.page(text, 2, 120)
+	expect(string.find(p2, "line 121", 1, true) and not string.find(p2, "line 120\n", 1, true), p2)
+	expect(string.find(p2, "page 2 of 3", 1, true), p2)
+	expect(BG.page("short", 1) == "short")
+	local a, b = BG.withUndo("x", function()
+		return 1, 2
+	end)
+	expect(a == 1 and b == 2)
+end)
