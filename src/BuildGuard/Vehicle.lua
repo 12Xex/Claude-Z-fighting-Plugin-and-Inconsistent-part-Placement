@@ -5,10 +5,12 @@
 	Orientation: the model's PrimaryPart (or `options.frame`, or else its
 	biggest non-wheel part). Front is the frame's -Z (LookVector), up is +Y.
 
-	Wheels: parts named *wheel*, *tire* or *tyre*, or with the attribute
-	BuildGuardWheel = true (false excludes a part). Their radius is half the
-	smaller of a cylinder's Y/Z size (cylinders roll about X), or half their
-	height for other shapes.
+	Wheels: Classify.wheels (the BuildGuardWheel attribute or tag, else parts
+	spinning on a hinge through their centre, else names whose first word is
+	wheel/tire/tyre followed only by position words, so a steering wheel,
+	spare wheel or wheel arch isn't one). Their radius is half the smaller
+	of a cylinder's Y/Z size (cylinders roll about X), or half their height
+	for other shapes.
 
 	All measurements use part bounding boxes, so round parts (springs, hubs)
 	count as slightly lower than they are. The ledge figure is an estimate:
@@ -16,23 +18,9 @@
 	usually manage about half of it.
 ]]
 
+local Classify = require(script.Parent.Classify)
+
 local Vehicle = {}
-
-local WHEEL_NAMES = { "wheel", "tire", "tyre" }
-
-local function isWheel(part)
-	local flag = part:GetAttribute("BuildGuardWheel")
-	if flag ~= nil then
-		return flag == true
-	end
-	local name = string.lower(part.Name)
-	for _, fragment in WHEEL_NAMES do
-		if string.find(name, fragment, 1, true) then
-			return true
-		end
-	end
-	return false
-end
 
 local function corners(part, frame)
 	local half = part.Size / 2
@@ -77,12 +65,21 @@ function Vehicle.measure(model, options)
 			table.insert(parts, d)
 		end
 	end
+	local isWheel = {}
+	for _, w in Classify.wheels(model) do
+		isWheel[w] = true
+	end
 	local wheels, body = {}, {}
 	for _, p in parts do
-		table.insert(if isWheel(p) then wheels else body, p)
+		table.insert(if isWheel[p] then wheels else body, p)
 	end
 	if #wheels == 0 then
-		error("BuildGuard: no wheels found in " .. model:GetFullName() .. "; name them Wheel/Tire or set BuildGuardWheel = true", 2)
+		error(
+			"BuildGuard: no wheels found in "
+				.. model:GetFullName()
+				.. "; name them Wheel_FL, Tire_RearLeft and so on, or tag them BuildGuardWheel",
+			2
+		)
 	end
 
 	local frame = options.frame or (model:IsA("Model") and model.PrimaryPart and model.PrimaryPart.CFrame)
@@ -121,7 +118,7 @@ function Vehicle.measure(model, options)
 		end
 		minV = Vector3.new(math.min(minV.X, lo.X), math.min(minV.Y, lo.Y), math.min(minV.Z, lo.Z))
 		maxV = Vector3.new(math.max(maxV.X, hi.X), math.max(maxV.Y, hi.Y), math.max(maxV.Z, hi.Z))
-		if not isWheel(p) then
+		if not isWheel[p] then
 			local h = lo.Y - ground
 			clearance = math.min(clearance, h)
 			-- Any part of it between the axles limits breakover.

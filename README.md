@@ -12,8 +12,7 @@ A Roblox Studio plugin (and a library you can call from the command bar or an MC
 | **Snap to ground** | Raycasts down under roads/rails/tracks and puts them their kind's lift above the surface (roads 0.1, rails 0.2) | Preview, then apply (undoable) |
 | **Drivability lint** | For roads and rails: ledges above `maxLedge` and slope changes above `maxSlopeChange` between connected pieces, the step from the ground beside a road onto its edge, any piece steeper than `maxRouteSlope`, and roads narrower than `minRoadWidth` | Report only |
 | **Headroom** | Flags tunnel roofs, bridges and overhangs lower than a kind's headroom setting (`roadHeadroom` etc.; off until set) | Report only |
-| **Vehicle check** | Colliding parts of a vehicle that overlap at rest (invisible collision boxes included, unless a NoCollisionConstraint allows it), and wheels that hit something anywhere in their suspension travel and steering lock (read from the constraint limits) | Report only |
-| **Vehicle profile** | `BG.checkVehicle(truck)` measures a vehicle from its colliding parts (wheels, clearance, approach/departure/breakover angles) and its visible parts (width with mirrors, height) and checks the road limits against it. Drive-tested limits can be recorded so they stop asking. | Report only |
+| **Vehicle profile** | `BG.checkVehicle(truck)` measures an imported truck (width, height, wheels, clearance, approach/departure/breakover angles) and checks the road limits against it | Report only |
 | **Fix report** | `BG.formatChanges(result)` lists every part a fix changed, by path, with its exact move and the line to put in the script that builds it | — |
 | **Test scene + self-test** | Builds a messy scene with planted problems for every check and proves each one is found, then fixed (or still flagged, for lint and manual cases), with control parts that must never be flagged | — |
 
@@ -33,7 +32,7 @@ rojo build default.project.json -o BuildGuard.rbxm
 This repo is also a Claude Code plugin marketplace. The `roblox-buildguard` plugin gives Claude:
 
 - a **`roblox-building` skill** Claude loads on its own whenever it builds in Studio. It covers using `Layers.place` for details, snapping roads and rails, keeping roads drivable, and running BuildGuard's check before calling a build done.
-- **step-by-step workflows** (`skills/roblox-building/workflows.md`) for each kind of build: landscape, roads, rails, tunnels and caves, rivers, town buildings, details, vehicles and NPCs, plus how to report back and what to do when something goes wrong. At the start of each session Claude checks that the library in the place is the right version.
+- **step-by-step workflows** (`skills/roblox-building/workflows.md`) for each kind of build: landscape, roads, rails, tunnels and caves, rivers, town buildings, details, placing imported vehicles and NPCs, plus how to report back and what to do when something goes wrong. At the start of each session Claude checks that the library in the place is the right version.
 - a **`/roblox-buildguard:check [path]`** command: report, preview, then apply fixes only after you say yes.
 
 Setup, once:
@@ -85,7 +84,7 @@ Messages name parts by their path from the scanned model, with `#n` on the nth o
 - **Road / Rail / Track:** the `BuildGuardKind` attribute (`"Road"`, `"Rail"`, `"Track"` or `"None"`), then a CollectionService tag with the same name, then the part's name: its **first word** must be road/street/highway, rail/railroad/railway or track/trackbed (words split at capitals, digits and punctuation), and the part must be flat and not round. So `Road_01` and `TrackBed` count, but `BedRail`, `RoofRail`, `Railing`, `RoadSign` and `StreetLamp` don't, and nothing inside a vehicle counts by name. `classifyByName = false` uses tags and attributes only. Each road's driving surface is its **Top (+Y) face**.
 - **Ground:** Terrain, the `BuildGuardGround` tag or attribute, or a flat part whose first word is `Baseplate`/`Ground`/`Terrain`. Size alone doesn't make a part ground (a big floor slab or roof isn't).
 - **Wheels:** the `BuildGuardWheel` tag or attribute; else parts that spin on a hinge or cylindrical constraint through their centre; else names whose first word is wheel/tire/tyre followed only by position words (`Wheel_FL`). A steering wheel, spare wheel or wheel arch is never a wheel.
-- **Vehicles:** everything joined to a VehicleSeat or to two or more spinning wheels, and every part of a model holding a VehicleSeat or marked `BuildGuardVehicle`.
+- **Vehicles** (so their parts never count as roads by name): everything joined to a VehicleSeat or to two or more spinning wheels, and every part of a model holding a VehicleSeat or marked `BuildGuardVehicle`.
 - **Layered items:** anything placed with `Layers.place` (it sets `BuildGuardLayer`). These never count as covering a road, and they move with the road when it's snapped.
 - **Never moved by fixes:** ground parts, `Locked` parts, and parts with `BuildGuardLocked = true`.
 - **Skipped entirely:** anything at or under an instance with the `BuildGuardIgnore` attribute or tag. It also never counts as cover, ground or a ceiling.
@@ -97,7 +96,6 @@ Messages name parts by their path from the scanned model, with `#n` on the nth o
 - **Buried:** a point is buried when something occupies the space `buriedProbeHeight` (0.25) above the surface, so markings lying on the road don't trigger it, or when something within `buriedClearance` (3 studs) overhead covers it. Bridges and gantries higher than that are fine.
 
 - **Round parts:** two same-size cylinders on one axis (a rod in a sleeve) or two same-size balls on one centre: the smaller part's radius grows by the nudge.
-- **Vehicles:** colliding parts in different assemblies (not welded together, not joined by a hinge or ball socket, and without a NoCollisionConstraint) mustn't overlap. Wheels are swept through every combination of their suspension travel and steering lock from the constraint limits (`steerLock` covers steering that a script drives), and anything they hit is reported with the angle and travel.
 - **Moving jointed parts:** after a fix moves a part, any Weld or Motor6D holding it is updated (`C1`) to hold it in its new place. WeldConstraints are toggled off and on so they record the new offset. Revert restores them. Without this, a nudged truck strut would snap back when the game runs. (The WeldConstraint behaviour is untested in Studio.)
 
 ## Values
@@ -135,8 +133,8 @@ The library runs outside Studio under [Lune](https://github.com/lune-org/lune) w
 
 ```sh
 lune run tests/run       # unit tests (tests/unit/*.luau) + self-test with three different configs
-lune run tests/run -- vehicle   # only tests whose name contains "vehicle"
+lune run tests/run zfight   # only tests whose name contains "zfight"
 lune run tests/report    # prints the test scene's report before and after fixAll
 ```
 
-The Studio-only parts (the plugin UI, `StudioWorld`'s raycasts, terrain voxel reads, EditableMesh loading and collision groups, ChangeHistoryService undo) can't run there. Check them in Studio with **Run self-test**.
+The Studio-only parts (the plugin UI, `StudioWorld`'s raycasts, terrain voxel reads, EditableMesh loading, ChangeHistoryService undo) can't run there. Check them in Studio with **Run self-test**.

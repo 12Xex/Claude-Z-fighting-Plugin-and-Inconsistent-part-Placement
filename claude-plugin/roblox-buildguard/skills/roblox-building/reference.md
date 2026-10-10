@@ -10,7 +10,7 @@
 | `BG.scan(root, options)` | Returns `report` (`report.issues`, `report.counts.error/warning`, `report.timings`, `report.coverage`). `root` can be an Instance or a list. Options: `config`, `yield = false` (never pause), `onProgress(stage, done, total)`. |
 | `BG.startCheck(root)` | Starts `BG.check` in the background for a big area and returns an id at once. |
 | `BG.jobStatus(id)` | `text, state`: progress while `"running"`, the full report when `"done"`. The last 5 jobs are kept in `ServerStorage.BuildGuardJobs` (not saved with the place). |
-| `BG.format(report)` | Report as a string: mesh coverage, overrides, issues, vehicle notes, time per check. |
+| `BG.format(report)` | Report as a string: mesh coverage, overrides, issues, time per check. |
 | `BG.planFixes(report)` | Returns `plan, unfixedIssues`. Nothing moves yet. |
 | `BG.Plan.describe(plan)` | Plan preview as a string. |
 | `BG.apply(plan)` | Applies as one undo step. Errors if any part changed since the plan was made. |
@@ -28,11 +28,9 @@
 | `BG.getConfig(instance)` | Returns `config, sources` (`sources[key]` = the instance that set it) |
 | `BG.explainConfig(instance)` | Every setting for the instance and where it comes from, as text |
 | `BG.snapToGrid(cframeOrVector, relativeTo?)` | Rounds X/Z to `gridSize` (from `relativeTo`'s config). Keeps height and rotation. |
-| `BG.checkVehicle(model, target?)` | Measures a vehicle and compares it with the limits for `target` (default workspace). Also runs the vehicle's collision and wheel-sweep checks. Returns `text, rows, profile`; each row is ok / check / tested / fail. |
-| `BG.measureVehicle(model)` | Two profiles. Colliding parts: wheels, wheel radius, wheelbase, ground clearance, approach/departure/breakover angles, `collisionWidth`. Visible parts: `width` (with mirrors), length. `height` covers both. |
-| `BG.vehicleLimits(profile)` | `{ maxLedge, maxSlopeChange, minRoadWidth, roadHeadroom }` that vehicle needs (`minRoadWidth` = 2 × width with mirrors + 2) |
-| `BG.markTested(model, key, reason, { value? })` | Records that a limit was drive-tested on this vehicle (value defaults to the current setting, date to today). Its "check" row then shows "tested" while the setting stays within the tested value. Keys: `maxLedge`, `maxRouteSlope`, `maxSlopeChange`, `minRoadWidth`, `roadHeadroom`. |
-| `BG.clearTested(model, key?)` | Removes a test record, or all of them. |
+| `BG.checkVehicle(model, target?)` | Measures an (imported) vehicle and compares it with the limits for `target` (default workspace). Returns `text, rows, profile`; each row is ok/check/fail. |
+| `BG.measureVehicle(model)` | Width, height, length, wheel radius, wheelbase, clearance, approach/departure/breakover angles (from part boxes) |
+| `BG.vehicleLimits(profile)` | `{ maxLedge, maxSlopeChange, minRoadWidth, roadHeadroom }` that vehicle needs |
 | `BG.selfTest()` | Builds the planted-problem scene, checks and fixes it, then removes it. Returns `{ passed, text }`. |
 | `BG.TestScene.buildFarView(parent)` | Builds the far-view rig: plate pairs with gaps 0.005–0.2 and viewing spots at 100, 300 and 600 studs, for checking on a phone which gap stops flickering. |
 
@@ -45,12 +43,10 @@ Every issue has `check`, `severity`, `message`, `parts`, `paths` (each part's pa
 | `config` | error | A `BuildGuard_` attribute is invalid; it's ignored | Fix or clear the attribute |
 | `duplicate` | error | Two parts of the same class and mesh at the same position and size (a double import) | Manual: delete one |
 | `buried` | error | Something covers a road/rail/track top | Snap onto the ground if the cover is terrain or ground. Otherwise manual. |
-| `collision` | error | Two colliding parts of a vehicle overlap at rest (different assemblies, no NoCollisionConstraint). Invisible collision boxes included. | Manual: NoCollisionConstraint, weld, or move one |
 | `offground` | warning | A flat road/rail/track hovers or is sunk more than 0.1 studs | Snap to ground |
 | `zfight` | error | Same-facing faces overlap within 0.01 studs: flat faces, the round sides of same-size cylinders on one axis, same-size balls on one centre, and mesh triangles (meshes the place can load) | Nudge the smaller part out (round parts grow their radius instead). It grows instead only when both opposite sides are visible. Welds/Motor6Ds on moved parts are updated. |
 | `zgap` | warning | In a model with `zFightViewDistance`, same-facing faces closer than the gap that holds at that distance | Nudge to that gap |
 | `meshoverlap` | warning | Two meshes/unions whose boxes nearly coincide (a double import or a z-fighting copy) | Manual: check by eye |
-| `wheelsweep` | warning | A wheel hits a colliding part somewhere in its suspension travel or steering lock (read from the constraint limits) | Manual |
 | `headroom` | warning | Less clear height above a road/rail/track than its kind's headroom setting | Manual |
 | `ledge` | warning | Step between connected roads (or rails) over `maxLedge` | Manual |
 | `edge` | warning | Step from the ground beside a road up onto (or down off) its edge over `maxLedge` | Manual: thinner road, or shape the ground up to it |
@@ -86,9 +82,6 @@ Set with `BG.setConfig` (or `BG.setProjectConfig` for the whole place), stored a
 | `edgeProbe` | 0.5 | 0.05–4 | How far outside a road edge the ground is measured |
 | `connectMargin` | 0.1 | 0–5 | Horizontal gap still counted as connected |
 | `connectMaxStep` | 4 | 0.1–100 | Bigger vertical gaps are overpasses (and drop-offs at road edges) |
-| `collisionTolerance` | 0.02 | 0–1 | Vehicle parts overlapping less than this are just touching |
-| `sweepSteps` | 5 | 2–21 | Poses per joint when sweeping wheels (ends and rest included) |
-| `steerLock` | 0 (unknown) | 0–90 | Steering lock in degrees each way for steering hinges with no limits (e.g. a Servo driven by a script) |
 
 Global settings (call options or `Config.lua` only): `classifyByName` (true), `kindNameWords`, `kindMaxThickness` (0.5), `drivableKinds`, `edgeLedgeKinds` ({"Road"}), `groundNames`, `groundMinFootprint` (0 = off), `meshTriangles` (true), `meshTriangleLimit` (20000), `meshOverlapRatio` (0.9).
 
@@ -96,8 +89,8 @@ Global settings (call options or `Config.lua` only): `classifyByName` (true), `k
 
 - **Road / Rail / Track:** the `BuildGuardKind` attribute (`"Road"`, `"Rail"`, `"Track"` or `"None"`), then a tag `Road`/`Rail`/`Track`, then the name: its **first word** is road/street/highway (Road), rail/railroad/railway (Rail) or track/trackbed (Track), and the part is flat (no thicker than half its longest side) and not a ball or cylinder. Words split at capitals, digits and punctuation, so `Road_01`, `RailYard` and `TrackBed` count; `BedRail`, `RoofRail`, `Railing`, `RoadSign` (a standing panel) and `StreetLamp` (a pole) don't. Parts of a vehicle never count by name.
 - **Ground:** Terrain, the `BuildGuardGround` tag or attribute, or a flat part whose first word is `Baseplate`/`Ground`/`Terrain`. Size alone no longer makes a part ground, so tag big floors that are ground.
-- **Wheels:** the `BuildGuardWheel` attribute or tag; else parts that spin on a HingeConstraint or CylindricalConstraint through their centre along their round axis; else (only when nothing spins) names whose first word is wheel/tire/tyre followed only by position words (`Wheel_FL`, `TireRearLeft`). Only colliding wheels touch the ground.
-- **Vehicles:** everything joined to a VehicleSeat or to two or more spinning wheels, plus every part of a model holding a VehicleSeat or marked `BuildGuardVehicle`.
+- **Wheels:** the `BuildGuardWheel` attribute or tag; else parts that spin on a HingeConstraint or CylindricalConstraint through their centre along their round axis; else (only when nothing spins) names whose first word is wheel/tire/tyre followed only by position words (`Wheel_FL`, `TireRearLeft`). Used by `checkVehicle`; a steering wheel, spare wheel or wheel arch is never a wheel.
+- **Vehicles** (so their parts never count as roads or rails by name): everything joined to a VehicleSeat or to two or more spinning wheels, plus every part of a model holding a VehicleSeat or marked `BuildGuardVehicle`.
 
 ## Attributes and tags
 
@@ -109,8 +102,7 @@ Global settings (call options or `Config.lua` only): `classifyByName` (true), `k
 | `BuildGuardLocked = true` | Fixes never move it (also true for `Locked` parts and ground) |
 | `BuildGuardIgnore` (attribute true or tag) | It and its descendants are skipped, and never count as cover, ground or a ceiling |
 | `BuildGuardLayer` | Set by `Layers.place`. Marks layered items. |
-| `BuildGuardWheel` (attribute true/false or tag) | Marks (or unmarks) a part as a wheel |
+| `BuildGuardWheel` (attribute true/false or tag) | Marks (or unmarks) a part as a wheel for `checkVehicle` |
 | `BuildGuardVehicle` (attribute true or tag) | Marks a model as a vehicle |
 | `BuildGuard_<key>` | A config override (see above) |
 | `BuildGuardConfigReason` | Why the overrides on this instance exist (set by `setConfig`) |
-| `BuildGuardTested_<key>`, `BuildGuardTestedNote_<key>` | A drive-test record (set by `markTested`) |

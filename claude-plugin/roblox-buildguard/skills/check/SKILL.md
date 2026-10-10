@@ -1,6 +1,6 @@
 ---
 name: check
-description: Check a Roblox build with BuildGuard (z-fighting on parts, round parts and meshes, duplicates, buried or floating roads/rails, ledges, road edges, steep joins, vehicle collisions and wheel clearance), preview the fixes, and apply them only after the user agrees.
+description: Check a Roblox build with BuildGuard (z-fighting on parts, round parts and meshes, duplicates, buried or floating roads/rails, ledges, road edges, steep joins), preview the fixes, and apply them only after the user agrees.
 argument-hint: "[instance path, e.g. workspace.Town]"
 disable-model-invocation: true
 ---
@@ -24,4 +24,4 @@ Check the build at `$ARGUMENTS` (use `workspace` if nothing was given) with Buil
    local result = BG.fixAll(<path>)
    return ("%d fix pass(es)\n%s\n\n%s"):format(#result.plans, BG.format(result.report), BG.formatChanges(result))
    ```
-4. Report what was fixed and list everything still open (ledges, edges, slopes, duplicates, vehicle collisions, wheel sweeps, roads under non-ground parts), each with a concrete suggestion. Mention that Ctrl+Z in Studio undoes each fix pass. If the model is built by a script, point out that the fix report's changes need to go into that script, or a rebuild brings the problems back.
+4. Report what was fixed and list everything still open (ledges, edges, slopes, duplicates, mesh overlaps, roads under non-ground parts), each with a concrete suggestion. Mention that Ctrl+Z in Studio undoes each fix pass. If the model is built by a script, point out that the fix report's changes need to go into that script, or a rebuild brings the problems back.

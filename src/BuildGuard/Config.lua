@@ -115,18 +115,6 @@ Config.defaults = {
 	-- Surfaces further apart vertically than this are an overpass, not a ledge.
 	connectMaxStep = 4,
 
-	-- Vehicles -------------------------------------------------------------------
-	-- Colliding parts of a vehicle that overlap by less than this are touching,
-	-- not overlapping.
-	collisionTolerance = 0.02,
-	-- Poses per joint when sweeping wheels through suspension travel and
-	-- steering lock (ends and rest always included).
-	sweepSteps = 5,
-	-- Steering lock (degrees each way) for a steering hinge that has no
-	-- limits set, e.g. a Servo whose angle comes from a script. 0 = unknown:
-	-- that hinge isn't swept and the report says so.
-	steerLock = 0,
-
 	-- Classification -----------------------------------------------------------
 	-- Set false to classify roads/rails/tracks by tag or attribute only.
 	classifyByName = true,
@@ -185,9 +173,6 @@ Config.schema = {
 	minRoadWidth = { min = 0, max = 1000 },
 	edgeLedgeKinds = { scope = "global" },
 	edgeProbe = { min = 0.05, max = 4 },
-	collisionTolerance = { min = 0, max = 1 },
-	sweepSteps = { min = 2, max = 21 },
-	steerLock = { min = 0, max = 90 },
 	classifyByName = { scope = "global", type = "boolean" },
 	kindNameWords = { scope = "global" },
 	kindMaxThickness = { scope = "global", min = 0.01, max = 10 },

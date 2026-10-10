@@ -1,6 +1,6 @@
 ---
 name: roblox-building
-description: Rules for building or editing parts in a Roblox place through a Roblox Studio MCP server (execute_luau, run_code or similar). Use whenever creating, moving or detailing parts, models, meshes, roads, rails, vehicles, signs, markings or trim in Studio. Covers z-fighting (flat faces, round parts, meshes), layering details on surfaces, snapping roads/rails to the ground, road edges and drivability, vehicle collisions and wheel clearance, setting per-model BuildGuard config, and checking the build before finishing.
+description: Rules for building or editing parts in a Roblox place through a Roblox Studio MCP server (execute_luau, run_code or similar). Use whenever creating, moving or detailing parts, models, meshes, roads, rails, signs, markings or trim in Studio, or placing imported vehicles. Covers z-fighting (flat faces, round parts, meshes), layering details on surfaces, snapping roads/rails to the ground, road edges and drivability, setting per-model BuildGuard config, and checking the build before finishing.
 ---
 
 # Building in Roblox Studio with BuildGuard
@@ -51,14 +51,7 @@ For the step-by-step order to build each kind of thing (session start, landscape
 - **Ground:** Terrain is ground. A big part that is ground (a floor slab under the map) must be tagged `BuildGuardGround`; size alone doesn't make it ground.
 - **Tunnels and caves:** build the tunnel floor first, then snap roads and rails onto it. Snapping finds the tunnel floor, not the mountain above. A road or rail buried deeper than 20 studs isn't moved; carve its tunnel instead. Headroom comes from the place-wide `roadHeadroom` (set from the truck), or from the tunnel's model: `BG.setConfig(mine, { roadHeadroom = 14 }, "13-stud haul truck")`.
 - **Meshes:** don't import a mesh twice (duplicates are errors). BuildGuard checks the triangles of meshes the place owner owns; other meshes and unions only by their box, and the report's `Meshes:` line says how many. Tell the user when meshes were box-only. Flat details on a mesh still go through Layers.
-- **Vehicles (trucks, minecarts):** build them as a real rig, so BuildGuard can read it:
-  - wheels spin on a HingeConstraint (or CylindricalConstraint) through their centre;
-  - steering on a HingeConstraint with `LimitsEnabled` and the lock in `LowerAngle`/`UpperAngle`;
-  - suspension on a PrismaticConstraint or CylindricalConstraint with `LimitsEnabled` and the travel in `LowerLimit`/`UpperLimit`;
-  - a VehicleSeat, and `PrimaryPart` = the chassis with its front facing -Z;
-  - details (springs, struts, mirrors, arms) welded, and no colliding part overlapping another unless a NoCollisionConstraint joins them. Invisible collision boxes count.
-
-  Then run `return (BG.checkVehicle(workspace.Vehicles.Truck))` and show the user every `FAIL` and `check` line. Don't change the project limits without their OK.
+- **Vehicles (trucks, minecarts) are modelled in Blender** and imported. Don't build or rework them in Studio, and don't apply BuildGuard fixes to parts inside a vehicle model (the next import brings the problem back): tell the user what the report found there so they fix it in Blender. To set road numbers from a truck, measure it with `return (BG.checkVehicle(workspace.Vehicles.Truck))` and show the user every `FAIL` and `check` line. Don't change the project limits without their OK.
 - **Lay out roads, rails and buildings on the 4-stud grid:** `part.CFrame = BG.snapToGrid(cf)`. This rounds X and Z only. Heights come from the snap and from layers, so never round heights or small detail to the grid.
 - **Labels, helpers and NPCs** that BuildGuard shouldn't check: tag the model or folder `BuildGuardIgnore` (CollectionService) or set the attribute.
 - Set `Size` and `CFrame` before `Parent`, and anchor static parts.
@@ -109,6 +102,6 @@ return BG.format(result.report) .. "\n\n" .. BG.formatChanges(result)   -- what'
 
 If a script builds the model, copy every change from the fix report into that script (each line gives the `part.CFrame *=` or `part.Size +=` to add). Otherwise the next rebuild brings the problems back.
 
-The build is only done when the final report shows **0 errors**. Invalid config attributes also count as errors. Tell the user about every line under "Config overrides in effect", the `Meshes:` line when meshes were checked by box only, and every `[NOTE]`. Warnings left over (ledges, edges, slopes, headroom, wheel sweeps, roads under non-ground parts) must be fixed in the build, or listed to the user by name with the reason. Never say a build is clean without having run the check.
+The build is only done when the final report shows **0 errors**. Invalid config attributes also count as errors. Tell the user about every line under "Config overrides in effect", the `Meshes:` line when meshes were checked by box only, and every `[NOTE]`. Warnings left over (ledges, edges, slopes, headroom, roads under non-ground parts) must be fixed in the build, or listed to the user by name with the reason. Never say a build is clean without having run the check.
 
 For the full API and what each check means, see [reference.md](reference.md).

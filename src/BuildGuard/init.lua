@@ -52,18 +52,16 @@ local CHECK_ORDER = {
 	config = 0,
 	duplicate = 1,
 	buried = 2,
-	collision = 3,
-	offground = 4,
-	zfight = 5,
-	zgap = 6,
-	meshoverlap = 7,
-	wheelsweep = 8,
-	headroom = 9,
-	ledge = 10,
-	edge = 11,
-	slope = 12,
-	routeslope = 13,
-	roadwidth = 14,
+	offground = 3,
+	zfight = 4,
+	zgap = 5,
+	meshoverlap = 6,
+	headroom = 7,
+	ledge = 8,
+	edge = 9,
+	slope = 10,
+	routeslope = 11,
+	roadwidth = 12,
 }
 
 local function defaultWorld()
@@ -273,7 +271,6 @@ function BuildGuard.scan(root, options)
 		timings = timings,
 		seconds = Util.clock() - started,
 		coverage = ctx.coverage,
-		vehicleNotes = ctx.vehicleNotes,
 		path = ctx.path,
 	}
 end
@@ -455,13 +452,6 @@ function BuildGuard.format(report)
 				if fixable then "" else "  (not auto-fixable)"
 			)
 		)
-	end
-	if report.vehicleNotes then
-		for model, notes in report.vehicleNotes do
-			for _, note in notes do
-				table.insert(lines, ("  [NOTE]    %s: %s"):format(if report.path then report.path(model) else model.Name, note))
-			end
-		end
 	end
 	if report.timings then
 		local parts = {}

@@ -131,26 +131,17 @@ local BG = require(game.ServerStorage.BuildGuard)
 3. `meshoverlap` warnings mean two meshes' boxes nearly coincide: usually a double import with a different mesh id, or an overlay mesh that will z-fight. Look at them and fix or explain.
 4. Detail meshes on a surface still go through `BG.Layers.place`.
 
-## Vehicles (trucks, minecarts) with detailed parts
+## Vehicles (imported from Blender)
 
-1. Build the vehicle as one model with a `VehicleSeat`. Set `PrimaryPart` to the chassis with the front facing -Z.
-2. Build it as a rig BuildGuard can read:
-   - each wheel spins on a HingeConstraint (or CylindricalConstraint) whose attachments sit at the wheel's centre, axis along the axle;
-   - steering: a HingeConstraint with `LimitsEnabled = true` and the lock in `LowerAngle`/`UpperAngle`. If a script drives a Servo without limits, set the lock on the truck: `BG.setConfig(truck, { steerLock = 33 }, "steering script turns 33°")`;
-   - suspension: a PrismaticConstraint or CylindricalConstraint with `LimitsEnabled = true` and the travel in `LowerLimit`/`UpperLimit` (or a SpringConstraint with `MinLength`/`MaxLength` beside it);
-   - detail parts (springs, struts, shocks, mirrors, arms) welded, not loose.
-3. Collision parts: every pair of colliding parts in different assemblies that overlap at rest is a `collision` error, invisible hull and floor boxes included. Fix each one by moving or shrinking a part, welding it, or adding a NoCollisionConstraint between the two. Visual-only parts (tyre meshes, arches, mirrors) should have `CanCollide = false`.
-4. Check it in edit mode, parked: `return BG.check(truck)`. `wheelsweep` warnings say which part a wheel hits, and at what steering angle and suspension travel; give that part room. `[NOTE]` lines say what couldn't be swept (no limits set, or a rig that builds its joints at runtime).
-5. Measure it, and show the user every `FAIL` and `check` line:
+Trucks and minecarts are modelled in Blender and imported. Don't build or rework them in Studio.
+
+1. To place one, move the whole model with `PivotTo`. Don't change its parts.
+2. If a check reports something inside a vehicle model (a z-fight, a duplicate mesh), don't apply the fix there: the next import brings it back. Tell the user which parts, so they fix it in Blender. If they'd rather BuildGuard skipped vehicles, tag the vehicle models `BuildGuardIgnore`.
+3. To set road numbers from a truck, measure it and show the user every `FAIL` and `check` line:
    ```lua
    return (BG.checkVehicle(workspace.Vehicles.HaulTruck))
    ```
-   It measures two profiles: colliding parts for wheels, clearance, angles and ledges; visible parts for width (with mirrors) and height. Two trucks passing need 2 × the width with mirrors + 2. Don't change the project's road limits yourself. Propose the change and let the user decide.
-6. When the user has drive-tested a limit (a loaded truck over the 1-stud ledge, up the 20° climb), record it on the truck with what they said, so the row stops asking:
-   ```lua
-   BG.markTested(workspace.Vehicles.HaulTruck, "maxLedge", "drove the 1.0 ledge with a full bed")
-   ```
-   Only record tests the user actually did. A record stops counting if the limit is later raised above the tested value.
+   Don't change the project's road limits yourself. Propose the change and let the user decide.
 
 ## NPCs
 
@@ -183,8 +174,6 @@ After each model, tell the user:
 | The check is slow or times out | Use `BG.startCheck(root)` and poll `BG.jobStatus(id)`, or check one model at a time. The report's `Time:` line shows which check is slow. |
 | `Meshes: ... by their box only (no permission ...)` | Those meshes belong to another creator, so their triangles can't be read. Check them by eye, or re-upload them under the user's account. |
 | `duplicate` | A mesh or part imported twice at the same place. Delete one. |
-| `collision ... at rest` | Two colliding vehicle parts overlap. Move or shrink one, weld them, or add a NoCollisionConstraint. |
-| `wheelsweep` | A wheel hits that part at the angle/travel given. Move the part or reduce the lock/travel (with the user's OK). |
 | `edge` | The road's top is more than 1 stud above (or below) the ground beside it. Use 0.8-thick roads, or raise the terrain to the road. |
 | `zgap` | In a far-view model, same-facing faces are closer than the gap that holds at its view distance. Apply the fix. |
-| `no colliding wheels found` | The wheels don't spin on constraints and aren't named `Wheel_…`/`Tire_…`, or have `CanCollide` off. Tag them `BuildGuardWheel`. |
+| `no wheels found` (checkVehicle) | The wheels don't spin on hinges and aren't named `Wheel_FL`/`Tire_RearLeft` and so on. Tag them `BuildGuardWheel`. |
