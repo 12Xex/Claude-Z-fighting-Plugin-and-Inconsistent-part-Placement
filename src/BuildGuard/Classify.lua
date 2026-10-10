@@ -6,14 +6,25 @@
 	  2. A CollectionService tag named Road, Rail or Track
 	  3. The part's name, when Config.classifyByName is on: its FIRST word is
 	     one of Config.kindNameWords ("Road_01", "RailYard", "TrackBed"; not
-	     "BedRail", "RoofRail" or "Railing"), it's flat (no thicker than
-	     kindMaxThickness of its longest side, so not "RoadSign" or
-	     "StreetLamp"), it isn't a ball or cylinder, and it isn't part of a
-	     vehicle (`inVehicle`).
+	     "BedRail", "RoofRail" or "Railing"), and the part looks like one:
+	       * flat: no thicker than kindMaxThickness of its longest side, and
+	         not a panel standing on edge (taller than its shorter side and
+	         over a stud tall), so not "RoadSign", "Road_Guardrail" or
+	         "StreetLamp"; not a ball, cylinder or corner wedge
+	       * upright: its top within 45° of level (a block may be upside
+	         down; a wedge's slope must face up), so not a sign facing
+	         sideways on a wall or post
+	       * not a layered item (markings and signs placed with Layers)
+	       * a road is at least ROAD_MIN_WIDTH wide (its shorter side), so
+	         not a "StreetLight" head or a "Road_Kerb" strip
+	       * not part of a vehicle (`inVehicle`)
+	     Tag or mark anything else (a ramp steeper than 45°).
 
-	Ground: Terrain, the BuildGuardGround attribute or tag, a flat part whose
-	first name word is in Config.groundNames ("Baseplate", "Ground_Main"), or
-	(only if groundMinFootprint is above 0) a part at least that big.
+	Ground: Terrain, the BuildGuardGround attribute or tag (on the part or
+	any ancestor, the nearest one winning, so a floor folder can be tagged
+	once), a flat part whose first name word is in Config.groundNames
+	("Baseplate", "Ground_Main"), or (only if groundMinFootprint is above 0)
+	a part at least that big.
 
 	Wheels: the BuildGuardWheel attribute or tag (true/false), else parts that
 	spin on a HingeConstraint/CylindricalConstraint through their centre along
@@ -28,10 +39,18 @@
 ]]
 
 local Util = require(script.Parent.Util)
+local Geometry = require(script.Parent.Geometry)
 
 local Classify = {}
 
 local KINDS = { Road = true, Rail = true, Track = true }
+
+-- A part named as a road must be at least this wide (studs, its shorter
+-- side) to count as one.
+Classify.ROAD_MIN_WIDTH = 4
+-- ...and its top within 45° of level (or of upside down). Float CFrames
+-- land a hair under cos 45° at exactly 45°.
+local NAME_MIN_UP = math.cos(math.rad(45)) - 1e-4
 
 -- Is `part` flat enough to be a road/rail/track or ground by its name?
 function Classify.isFlat(part, config)
@@ -42,7 +61,32 @@ function Classify.isFlat(part, config)
 		end
 	end
 	local size = part.Size
-	return size.Y <= config.kindMaxThickness * math.max(size.X, size.Z)
+	if size.Y > config.kindMaxThickness * math.max(size.X, size.Z) then
+		return false
+	end
+	-- A panel standing on edge (a sign, a barrier). Rails are taller than
+	-- they're wide, but under a stud.
+	return not (size.Y > math.min(size.X, size.Z) and size.Y > 1)
+end
+
+-- Does `part`'s shape and placement fit a `kind` named by its name?
+local function looksLike(part, kind, config)
+	if Classify.isLayered(part) or not Classify.isFlat(part, config) then
+		return false
+	end
+	local shape = Geometry.shapeOf(part)
+	if shape == "CornerWedge" then
+		return false
+	end
+	local size, cf = part.Size, part.CFrame
+	-- A box looks the same either way up; a wedge upside down has no top.
+	local up = if shape == "Wedge"
+		then cf:VectorToWorldSpace(Vector3.new(0, size.Z, -size.Y).Unit).Y
+		else math.abs(cf.UpVector.Y)
+	if up < NAME_MIN_UP then
+		return false
+	end
+	return kind ~= "Road" or math.min(size.X, size.Z) >= Classify.ROAD_MIN_WIDTH
 end
 
 -- `inVehicle(part)` (optional) says whether the part belongs to a vehicle.
@@ -65,7 +109,7 @@ function Classify.kind(part, config, world, inVehicle)
 	end
 	for _, rule in config.kindNameWords do
 		if table.find(rule.words, first) then
-			if not Classify.isFlat(part, config) or (inVehicle and inVehicle(part)) then
+			if not looksLike(part, rule.kind, config) or (inVehicle and inVehicle(part)) then
 				return nil
 			end
 			return rule.kind
@@ -79,15 +123,48 @@ function Classify.isLayered(part)
 	return part:GetAttribute("BuildGuardLayer") ~= nil
 end
 
--- Terrain and parts marked or named as ground.
-function Classify.isGroundLike(instance, config)
+local UNMARKED = {}
+
+-- BuildGuardGround on `instance` or its nearest marked ancestor: true,
+-- false or nil (not set). Pass a table as `cache` to reuse answers.
+function Classify.groundMarker(instance, cache)
+	cache = cache or {}
+	local chain = {}
+	local node = instance
+	local result = UNMARKED
+	while node do
+		local known = cache[node]
+		if known ~= nil then
+			result = known
+			break
+		end
+		table.insert(chain, node)
+		local marker = Util.marker(node, "BuildGuardGround")
+		if marker ~= nil then
+			result = marker
+			break
+		end
+		node = node.Parent
+	end
+	for _, n in chain do
+		cache[n] = result
+	end
+	if result == UNMARKED then
+		return nil
+	end
+	return result
+end
+
+-- Terrain and parts marked or named as ground. `cache` (optional) is
+-- passed to Classify.groundMarker.
+function Classify.isGroundLike(instance, config, cache)
 	if instance:IsA("Terrain") then
 		return true
 	end
 	if not instance:IsA("BasePart") then
 		return false
 	end
-	local marker = Util.marker(instance, "BuildGuardGround")
+	local marker = Classify.groundMarker(instance, cache)
 	if marker ~= nil then
 		return marker
 	end

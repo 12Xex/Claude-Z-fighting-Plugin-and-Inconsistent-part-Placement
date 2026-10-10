@@ -19,7 +19,13 @@
 	Off-ground messages name the part by its path from the scan root; the
 	issue's position is the part's bottom centre.
 
-	Tilted parts (ramps, slopes) are skipped: a ramp is meant to leave the ground.
+	Tilted parts (ramps, slopes) are skipped: a ramp is meant to leave the
+	ground. A block lying upside down rests on its Top face (a box looks the
+	same either way up), and a wedge on its flat bottom.
+
+	The driving surface (used by the buried and drivability checks too) is
+	the face that's up: Top, Bottom on a block upside down, or a wedge's
+	slope.
 ]]
 
 local Geometry = require(script.Parent.Parent.Geometry)
@@ -31,6 +37,58 @@ local Ground = {}
 local function isDescendantOf(instance, ancestor)
 	return instance:IsDescendantOf(ancestor)
 end
+
+--------------------------------------------------------------------------------
+-- The driving surface
+--------------------------------------------------------------------------------
+
+-- A block (or a mesh's box) whose up axis points down.
+local function upsideDown(s)
+	return (s.shape == "Block" or s.shape == "Other") and s.axes[2].Y < 0
+end
+
+-- 1, or -1 when the face that's up is the part's Bottom.
+local function upSign(s)
+	return if upsideDown(s) then -1 else 1
+end
+
+-- World point on the driving surface above the part's local (x, z).
+function Ground.surfacePoint(s, x, z)
+	local h = s.half
+	local y = if s.shape == "Wedge" then h.Y * z / h.Z else upSign(s) * h.Y
+	return s.cf:PointToWorldSpace(Vector3.new(x, y, z))
+end
+
+-- World normal of the driving surface.
+function Ground.surfaceNormal(s)
+	if s.shape == "Wedge" then
+		return s.cf:VectorToWorldSpace(Vector3.new(0, s.half.Z, -s.half.Y).Unit)
+	end
+	return s.axes[2] * upSign(s)
+end
+
+-- Degrees between the driving surface and level.
+function Ground.surfaceTilt(s)
+	return math.deg(math.acos(math.clamp(Ground.surfaceNormal(s).Y, -1, 1)))
+end
+
+-- A grid of points across the driving surface (see Geometry.faceSamples).
+function Ground.surfaceSamples(s, spacing)
+	if s.shape ~= "Wedge" then
+		return Geometry.faceSamples(s, if upsideDown(s) then "Bottom" else "Top", 0.05, 0.25, spacing)
+	end
+	-- The slope lies right over the bottom face: lift its grid onto it.
+	local out = {}
+	for i, p in Geometry.faceSamples(s, "Bottom", 0.05, 0.25, spacing) do
+		local lp = s.cf:PointToObjectSpace(p)
+		out[i] = Ground.surfacePoint(s, lp.X, lp.Z)
+	end
+	return out
+end
+
+--------------------------------------------------------------------------------
+-- Snapping
+--------------------------------------------------------------------------------
 
 -- Raycast filter for snapping solid `s`. Ground under a part has to start
 -- below the part's bottom; anything starting at or above it (markings, crates,
@@ -68,11 +126,13 @@ local function riders(s, ctx)
 			table.insert(out, d)
 		end
 	end
-	local box = s.cf * CFrame.new(0, s.half.Y + 1, 0)
+	local up = upSign(s)
+	local box = s.cf * CFrame.new(0, up * (s.half.Y + 1), 0)
 	for _, other in ctx.world.partsInBox(box, Vector3.new(s.size.X, 2, s.size.Z)) do
 		if not seen[other] and other ~= s.part and Classify.isLayered(other) and not ctx.isIgnored(other) then
 			local lp = s.cf:PointToObjectSpace(other.CFrame.Position)
-			if math.abs(lp.X) <= s.half.X and math.abs(lp.Z) <= s.half.Z and lp.Y >= s.half.Y and lp.Y <= s.half.Y + 2 then
+			local above = up * lp.Y
+			if math.abs(lp.X) <= s.half.X and math.abs(lp.Z) <= s.half.Z and above >= s.half.Y and above <= s.half.Y + 2 then
 				seen[other] = true
 				table.insert(out, other)
 			end
@@ -82,6 +142,7 @@ local function riders(s, ctx)
 end
 
 local LIFT_KEY = { Road = "roadLift", Rail = "railLift", Track = "trackLift" }
+Ground.LIFT_KEY = LIFT_KEY
 
 local function insideGround(point, ctx, ignore)
 	return ctx.world.isSolidTerrain(point) or ctx.world.partAt(point, ignore) ~= nil
@@ -107,6 +168,10 @@ end
 function Ground.measure(s, ctx)
 	local config = ctx.configFor(s.part)
 	local tilt = Geometry.tiltDegrees(s)
+	local restsOn = "Bottom"
+	if upsideDown(s) then
+		tilt, restsOn = 180 - tilt, "Top"
+	end
 	if tilt > config.flatTiltDegrees then
 		return { skip = ("tilted %.1f°, treated as a ramp"):format(tilt) }
 	end
@@ -114,7 +179,7 @@ function Ground.measure(s, ctx)
 	local lift = config[LIFT_KEY[ctx.kindOf(s.part)] or "groundLift"]
 	local topY = s.max.Y + 0.05
 	local best, hits, buried = -math.huge, 0, 0
-	for _, p in Geometry.faceSamples(s, "Bottom", 0.05, 0.25, config.sampleSpacing) do
+	for _, p in Geometry.faceSamples(s, restsOn, 0.05, 0.25, config.sampleSpacing) do
 		local start = openAirAbove(Vector3.new(p.X, topY, p.Z), ctx, ignore, config.snapSearchUp)
 		local hit
 		if start then
@@ -168,7 +233,7 @@ end
 -- Off-ground issue for one road/rail/track, or nil.
 local function offGroundIssue(s, kind, ctx)
 	local m = Ground.measure(s, ctx)
-	local bottom = s.cf:PointToWorldSpace(Vector3.new(0, -s.half.Y, 0))
+	local bottom = s.cf:PointToWorldSpace(Vector3.new(0, -upSign(s) * s.half.Y, 0))
 	if m.delta and math.abs(m.delta) > ctx.configFor(s.part).groundTolerance then
 		local what = if m.delta < 0
 			then ("hovers %.2f studs above the ground"):format(-m.delta)

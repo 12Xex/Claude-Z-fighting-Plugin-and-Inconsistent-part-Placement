@@ -21,13 +21,16 @@
 	    off the ground) aren't edge-checked: their edges change once fixed.
 
 	Two parts of the same kind are connected when their top surfaces, seen from above,
-	touch or overlap (within `connectMargin`). For each connected pair this
-	measures, at the junction:
+	touch or overlap (within `connectMargin`, or `edgeProbe` if larger, so a
+	small gap the edge probe steps over is still measured as a join). For
+	each connected pair this measures, at the junction:
 	  * ledge: the height step between the two top surfaces (> maxLedge flags)
 	  * slope: the angle between the two top surfaces (> maxSlopeChange flags)
 
 	Surfaces more than `connectMaxStep` apart vertically are treated as an
-	overpass and skipped. Each road's driving surface is its Top (+Y) face.
+	overpass and skipped. Each road's driving surface is the face that's up:
+	its Top (+Y) face, the Bottom of a block lying upside down, or a wedge's
+	slope (see Ground). Edges are still named by the part's own axes.
 
 	Limits for a join come from the smallest instance containing both pieces
 	(ctx.pairConfig): a model's overrides cover joins inside it, and joins to
@@ -38,6 +41,7 @@ local Geometry = require(script.Parent.Parent.Geometry)
 local SpatialHash = require(script.Parent.Parent.SpatialHash)
 local Classify = require(script.Parent.Parent.Classify)
 local Util = require(script.Parent.Parent.Util)
+local Ground = require(script.Parent.Ground)
 
 local Drivability = {}
 
@@ -56,6 +60,12 @@ local EDGES = {
 	{ name = "-Z", axis = 3, sign = -1 },
 }
 
+-- How far apart (seen from above) two pieces can be and still join: the
+-- edge probe steps over a gap this small as a join, so it's measured here.
+local function joinMargin(config)
+	return math.max(config.connectMargin, config.edgeProbe)
+end
+
 local function kindSet(list)
 	local set = {}
 	for _, kind in list do
@@ -64,16 +74,35 @@ local function kindSet(list)
 	return set
 end
 
+-- The driving surface's corners seen from above.
 local function footprint(s)
+	local h = s.half
 	local out = {}
-	for i, p in Geometry.topCorners(s) do
+	for i, st in { { -1, -1 }, { 1, -1 }, { 1, 1 }, { -1, 1 } } do
+		local p = Ground.surfacePoint(s, st[1] * h.X, st[2] * h.Z)
 		out[i] = { p.X, p.Z }
 	end
 	return out
 end
 
 local function topCenter(s)
-	return s.cf:PointToWorldSpace(Vector3.new(0, s.half.Y, 0))
+	return Ground.surfacePoint(s, 0, 0)
+end
+
+-- Closest point on the driving surface to `p`.
+local function closestOnTop(s, p)
+	local lp = s.cf:PointToObjectSpace(p)
+	return Ground.surfacePoint(s, math.clamp(lp.X, -s.half.X, s.half.X), math.clamp(lp.Z, -s.half.Z, s.half.Z))
+end
+
+-- Height of the driving surface's plane at world (x, z), or nil if it's near-vertical.
+local function topHeightAt(s, x, z)
+	local n = Ground.surfaceNormal(s)
+	if n.Y < 0.2 then
+		return nil
+	end
+	local p = topCenter(s)
+	return p.Y - (n.X * (x - p.X) + n.Z * (z - p.Z)) / n.Y
 end
 
 -- ", set on Map/Hills" when a limit came from a BuildGuard_ attribute.
@@ -101,8 +130,9 @@ local function edgePoints(s, edge, spacing)
 	end
 	local points = {}
 	for i, t in offsets do
-		local lp = if edge.axis == 1 then Vector3.new(edge.sign * h.X, h.Y, t) else Vector3.new(t, h.Y, edge.sign * h.Z)
-		points[i] = s.cf:PointToWorldSpace(lp)
+		points[i] = if edge.axis == 1
+			then Ground.surfacePoint(s, edge.sign * h.X, t)
+			else Ground.surfacePoint(s, t, edge.sign * h.Z)
 	end
 	return points
 end
@@ -125,7 +155,7 @@ end
 -- is flat), or nil when there's nothing to measure: another road or rail
 -- there (a join), another part (a kerb, a wall), something taller than
 -- connectMaxStep (a cliff, a tunnel wall) or no ground within it (a drop-off).
-local function stepAt(ctx, point, outward, config, ignore, drivable)
+local function stepAt(ctx, point, outward, config, ignore, drivable, groundCache)
 	local world = ctx.world
 	local probe = point + outward * config.edgeProbe
 	local reach = config.connectMaxStep + 0.5
@@ -140,7 +170,7 @@ local function stepAt(ctx, point, outward, config, ignore, drivable)
 	local instance = hit.instance
 	if not world.isTerrain(instance) then
 		local kind = ctx.kindOf(instance)
-		if (kind and drivable[kind]) or not Classify.isGroundLike(instance, ctx.config) then
+		if (kind and drivable[kind]) or not Classify.isGroundLike(instance, ctx.config, groundCache) then
 			return nil
 		end
 	end
@@ -156,6 +186,7 @@ function Drivability.edgeSteps(ctx, s, config)
 	config = config or ctx.configFor(s.part)
 	local drivable = kindSet(ctx.config.drivableKinds)
 	local ignore = edgeIgnore(s.part, ctx)
+	local groundCache = {}
 	local out = {}
 	for _, edge in EDGES do
 		local n = s.axes[edge.axis] * edge.sign
@@ -164,7 +195,7 @@ function Drivability.edgeSteps(ctx, s, config)
 			local points = edgePoints(s, edge, config.sampleSpacing)
 			local worst, at, measured = nil, nil, 0
 			for _, point in points do
-				local step = stepAt(ctx, point, flat.Unit, config, ignore, drivable)
+				local step = stepAt(ctx, point, flat.Unit, config, ignore, drivable, groundCache)
 				if step then
 					measured += 1
 					if not worst or math.abs(step) > math.abs(worst) then
@@ -227,7 +258,7 @@ end
 
 local function routeSlopeIssue(ctx, s, kind)
 	local config, sources = ctx.configFor(s.part)
-	local tilt = Geometry.tiltDegrees(s)
+	local tilt = Ground.surfaceTilt(s)
 	if tilt <= config.maxRouteSlope then
 		return nil
 	end
@@ -251,12 +282,12 @@ end
 local function joinIssues(ctx, ra, rb, issues)
 	local a, b = ra.solid, rb.solid
 	local config, sources = ctx.pairConfig(a.part, b.part)
-	if Geometry.polygonSeparation(ra.footprint, rb.footprint) > config.connectMargin then
+	if Geometry.polygonSeparation(ra.footprint, rb.footprint) > joinMargin(config) then
 		return
 	end
-	local pa, pb = Geometry.closestOnTop(a, topCenter(b)), Geometry.closestOnTop(b, topCenter(a))
+	local pa, pb = closestOnTop(a, topCenter(b)), closestOnTop(b, topCenter(a))
 	local jx, jz = (pa.X + pb.X) / 2, (pa.Z + pb.Z) / 2
-	local ya, yb = Geometry.topHeightAt(a, jx, jz), Geometry.topHeightAt(b, jx, jz)
+	local ya, yb = topHeightAt(a, jx, jz), topHeightAt(b, jx, jz)
 	if not ya or not yb then
 		return
 	end
@@ -264,7 +295,7 @@ local function joinIssues(ctx, ra, rb, issues)
 	if step > config.connectMaxStep then
 		return
 	end
-	local angle = math.deg(math.acos(math.clamp(a.axes[2]:Dot(b.axes[2]), -1, 1)))
+	local angle = math.deg(math.acos(math.clamp(Ground.surfaceNormal(a):Dot(Ground.surfaceNormal(b)), -1, 1)))
 	local at = Vector3.new(jx, math.max(ya, yb), jz)
 	table.insert(ra.joins, at)
 	table.insert(rb.joins, at)
@@ -358,7 +389,7 @@ function Drivability.scan(ctx, skipEdges)
 		if kind and drivable[kind] then
 			table.insert(roads, { solid = s, footprint = footprint(s), kind = kind, joins = {} })
 			local config = ctx.configFor(s.part)
-			marginXZ = math.max(marginXZ, config.connectMargin)
+			marginXZ = math.max(marginXZ, joinMargin(config))
 			marginY = math.max(marginY, config.connectMaxStep)
 			local issue = routeSlopeIssue(ctx, s, kind)
 			if issue then
@@ -366,7 +397,7 @@ function Drivability.scan(ctx, skipEdges)
 			end
 		end
 		local edgeChecked = kind and edgeKinds[kind] and not skipEdges[s.part]
-		if edgeChecked and Geometry.tiltDegrees(s) <= EDGE_MAX_TILT + 1e-3 then
+		if edgeChecked and Ground.surfaceTilt(s) <= EDGE_MAX_TILT + 1e-3 then
 			for _, issue in edgeIssues(ctx, s, kind) do
 				table.insert(issues, issue)
 			end

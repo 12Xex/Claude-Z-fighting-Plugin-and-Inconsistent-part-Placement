@@ -28,6 +28,18 @@
 	                                          weld must be updated to hold the nudged strut
 	  P16 Road_Thick         edge       flag  road so thick that the step from the ground up
 	                                          onto it is above maxLedge
+	  P27 Road_UnderLow      headroom   flag  a Road_* deck crossing over it lower than the
+	                                          Overpasses model's roadHeadroom
+	  P28 Road_WedgeSteep    routeslope flag  WedgePart ramp whose slope is too steep
+	  P29 Road_WedgeSteep    slope      flag  the same wedge joined to a flat road at its foot
+	  P30 Road_GapHigh       ledge      flag  raised road a small gap (under edgeProbe) past
+	                                          the end of another
+	  P31 Road_YardThick     edge       flag  thick road on a pad that's ground through its
+	                                          folder's BuildGuardGround tag
+
+	Road controls with them: the same overpass built high, a gentle wedge
+	ramp (its foot is at ground level) up to a road on a plinth, a road
+	built upside down, a thin road on the yard pad.
 
 	P17 to P26 (meshes, round parts, corner wedges, far view, repeated names
 	and names that aren't roads) are built by TestCases.lua and listed
@@ -184,6 +196,8 @@ function TestScene.build(parent, world, config, origin)
 	part("Plinth", Vector3.new(21, ledge, W + 2), CFrame.new(20.5, ledge / 2, zA), Color3.fromRGB(170, 170, 160), Enum.Material.Concrete)
 	plant(road("Road_B_Raised", Vector3.new(20, T, W), CFrame.new(20, ledge + roadY, zA)), "P9", "ledge", "flag", ("%.2f stud step"):format(ledge))
 	local steepRoad = road("Road_C_Steep", Vector3.new(16, T, W), CFrame.new(-10, roadTop, zA) * CFrame.Angles(0, 0, -math.rad(steep)) * CFrame.new(-8, -T / 2, 0))
+	-- Steeper than 45° a name alone doesn't make a road (it could be a sign).
+	steepRoad:SetAttribute("BuildGuardKind", "Road")
 	plant(steepRoad, "P10", "slope", "flag", ("%.0f° join"):format(steep))
 	guardrails(steepRoad)
 	table.insert(planted, { id = "P11", part = steepRoad, check = "routeslope", expect = "flag", note = ("%.0f° route"):format(steep) })
@@ -263,6 +277,7 @@ function TestScene.build(parent, world, config, origin)
 	local zM = -3 * R
 	control(road("Road_M1", Vector3.new(20, T, W), CFrame.new(-60, roadY, zM))).Parent = pass
 	local passRamp = control(road("Road_M2_Steep", Vector3.new(16, T, W), CFrame.new(-50, roadTop, zM) * CFrame.Angles(0, 0, math.rad(steep)) * CFrame.new(8, -T / 2, 0)))
+	passRamp:SetAttribute("BuildGuardKind", "Road")
 	passRamp.Parent = pass
 	guardrails(passRamp)
 
@@ -275,6 +290,96 @@ function TestScene.build(parent, world, config, origin)
 		"flag",
 		("%.2f-stud step up from the ground"):format(thick + config.roadLift)
 	)
+
+	local CONCRETE = Color3.fromRGB(170, 170, 160)
+	local METAL = Color3.fromRGB(190, 190, 195)
+
+	-- P27: a Road_* deck on abutments crossing low over a road. The
+	-- Overpasses model asks for more headroom than it leaves; the same
+	-- crossing built higher is a control. Each deck stays over
+	-- connectMaxStep above its road, so it's an overpass, not a ledge.
+	local overpasses = Instance.new("Model")
+	overpasses.Name = "Overpasses"
+	overpasses.Parent = folder
+	local deckT = 1
+	local lowClear = math.max(config.connectMaxStep, 2)
+	local headroom = lowClear + 2
+	overpasses:SetAttribute("BuildGuard_roadHeadroom", headroom)
+	overpasses:SetAttribute("BuildGuardConfigReason", "trucks pass under the overpasses")
+	local function overpass(x, clear, suffix)
+		local under = road("Road_Under" .. suffix, Vector3.new(L, T, W), CFrame.new(x, roadY, zA))
+		under.Parent = overpasses
+		local bottom = roadTop + clear
+		for _, side in { -1, 1 } do
+			local h = bottom - config.roadLift
+			part("Abutment", Vector3.new(W, h, 2), CFrame.new(x, h / 2, zA + side * (W / 2 + 2)), CONCRETE, Enum.Material.Concrete).Parent = overpasses
+		end
+		control(road("Road_Overpass" .. suffix, Vector3.new(W, deckT, W + 8), CFrame.new(x, bottom + deckT / 2, zA))).Parent = overpasses
+		return under
+	end
+	plant(overpass(125, lowClear, "Low"), "P27", "headroom", "flag", ("road deck %.1f up, needs %.1f"):format(lowClear, headroom))
+	control(overpass(125 + L + 14, lowClear + 4, "High"))
+
+	-- WedgePart ramps are measured on their slope. A gentle one from the
+	-- ground up to a road on a plinth, with guardrails along its sides, is a
+	-- control: its foot is at ground level. P28/P29: a steep one (marked,
+	-- being over 45°) off the end of a road.
+	local zW = -3 * R
+	local function wedgeRoad(name, size, footX)
+		-- The slope rises towards local +Z; turned so it rises towards +X.
+		local cframe = CFrame.new(footX + size.Z / 2, config.roadLift + size.Y / 2, zW) * CFrame.Angles(0, math.pi / 2, 0)
+		return part(name, size, cframe, ASPHALT, Enum.Material.Asphalt, "WedgePart")
+	end
+	-- Pieces joined end to end only need W across the join, so they're kept
+	-- short: every sample point costs time in each scan.
+	local run, x0 = 16, 106
+	local rise = run * math.tan(math.rad(gentle))
+	control(wedgeRoad("Road_WedgeRamp", Vector3.new(W, rise, run), x0))
+	for _, side in { -1, 1 } do
+		part("Guardrail", Vector3.new(run, rise + 1, 1), CFrame.new(x0 + run / 2, (rise + 1) / 2, zW + side * (W / 2 + 0.5)), METAL, Enum.Material.Metal)
+	end
+	local rampTop = config.roadLift + rise
+	local plinthH = rampTop - T - config.roadLift
+	part("Plinth", Vector3.new(9, plinthH, W + 2), CFrame.new(x0 + run + 4.5, plinthH / 2, zW), CONCRETE, Enum.Material.Concrete)
+	control(road("Road_WedgeTop", Vector3.new(8, T, W), CFrame.new(x0 + run + 4, rampTop - T / 2, zW)))
+	local wedgeSteep = math.min(steep + 5, 80)
+	local footX = x0 + run + 24
+	road("Road_WedgeFoot", Vector3.new(8, T, W), CFrame.new(footX, roadY, zW))
+	local steepRun = 6
+	local steepWedge = wedgeRoad("Road_WedgeSteep", Vector3.new(W, steepRun * math.tan(math.rad(wedgeSteep)), steepRun), footX + 4)
+	steepWedge:SetAttribute("BuildGuardKind", "Road")
+	plant(steepWedge, "P28", "routeslope", "flag", ("%.0f° wedge slope"):format(wedgeSteep))
+	table.insert(planted, { id = "P29", part = steepWedge, check = "slope", expect = "flag", note = ("%.0f° join at its foot"):format(wedgeSteep) })
+
+	-- P30: a raised road a small gap (more than connectMargin, less than
+	-- edgeProbe) past the end of another: still a join, so its ledge counts.
+	local gap = (config.connectMargin + config.edgeProbe) / 2
+	local xg = -170
+	road("Road_GapLow", Vector3.new(8, T, W), CFrame.new(xg, roadY, zM))
+	part("Plinth", Vector3.new(9, ledge, W + 2), CFrame.new(xg + 8.5 + gap, ledge / 2, zM), CONCRETE, Enum.Material.Concrete)
+	plant(road("Road_GapHigh", Vector3.new(8, T, W), CFrame.new(xg + 8 + gap, ledge + roadY, zM)), "P30", "ledge", "flag", ("%.2f step across a %.2f gap"):format(ledge, gap))
+
+	-- A road built upside down (a block looks the same either way up),
+	-- resting on the ground: a control, checked on the face that's up.
+	control(road("Road_Flipped", Vector3.new(L, T, W), CFrame.new(-100, roadY, zM) * CFrame.Angles(math.pi, 0, 0)))
+
+	-- P31: a yard pad in a folder tagged BuildGuardGround (the pad itself
+	-- isn't tagged) with a thick road on it: the step up from the pad counts.
+	-- A thin road on the same pad is a control.
+	local yard = Instance.new("Folder")
+	yard.Name = "YardFloor"
+	yard:AddTag("BuildGuardGround")
+	yard.Parent = folder
+	local padTop, zY = 1, 3 * R
+	part("YardPad", Vector3.new(2 * L + 20, padTop, W + 22), CFrame.new(-150, padTop / 2, zY), CONCRETE, Enum.Material.Concrete).Parent = yard
+	plant(
+		road("Road_YardThick", Vector3.new(L, thick, W), CFrame.new(-150 - L / 2 - 5, padTop + config.roadLift + thick / 2, zY)),
+		"P31",
+		"edge",
+		"flag",
+		("%.2f-stud step up from a pad that's ground by its folder's tag"):format(thick + config.roadLift)
+	)
+	control(road("Road_YardThin", Vector3.new(L, T, W), CFrame.new(-150 + L / 2 + 5, padTop + roadY, zY)))
 
 	-- The v0.6 cases (TestCases.lua).
 	local builder = {

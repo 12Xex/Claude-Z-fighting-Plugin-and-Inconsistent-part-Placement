@@ -149,8 +149,9 @@ end)
 
 test("edge: steep parts (over 45°), rails and markings are not edge-checked", function()
 	local root, world, part = setup()
-	part("Road_Wall", Vector3.new(16, 2, W), CFrame.new(0, 6, 0) * CFrame.Angles(0, 0, math.rad(60)))
-	part("Rail_Tall", Vector3.new(20, 1.5, 1), CFrame.new(0, D.railLift + 0.75, 60))
+	-- Over 45° a name alone doesn't make a road, so this one is marked.
+	part("Road_Wall", Vector3.new(16, 2, W), CFrame.new(0, 6, 0) * CFrame.Angles(0, 0, math.rad(60))):SetAttribute("BuildGuardKind", "Road")
+	part("Rail_Tall", Vector3.new(20, 1.5, 2), CFrame.new(0, D.railLift + 0.75, 60))
 	local report = BG.scan(root, { world = world })
 	expect(#checks(report, "edge") == 0, BG.format(report))
 	local rails = BG.scan(root, { world = world, config = { edgeLedgeKinds = { "Road", "Rail" } } })
@@ -416,4 +417,206 @@ test("a truck parked on a road neither buries it nor is a ceiling", function()
 	seat.Parent = truck
 	local report = BG.scan(root, { world = world, config = { roadHeadroom = 10 } })
 	expect(#checks(report, "buried") == 0 and #checks(report, "headroom") == 0, BG.format(report))
+end)
+
+test("signs on posts and boards, lane lines and lamp heads named like roads are never linted or moved", function()
+	local root, world, part = setup()
+	local thin = D.maxLedge - D.roadLift - 0.1
+	local road = part("Road_1", Vector3.new(40, thin, W), CFrame.new(0, D.roadLift + thin / 2, 0))
+	local z = W / 2 + 2
+	-- Mounted on the road side of their posts, high up.
+	part("SignPost", Vector3.new(0.5, 12, 0.5), CFrame.new(-10, 6, z))
+	local exit = part("Highway_Exit", Vector3.new(12, 4, 0.5), CFrame.new(-10, 10, z - 0.5))
+	part("SignPost", Vector3.new(0.5, 8, 0.5), CFrame.new(6, 4, z))
+	local sign = part("RoadSign", Vector3.new(6, 3, 0.2), CFrame.new(6, 6, z - 0.35))
+	-- Placed on a board's front the documented way (Size.Y is its thickness).
+	local board = part("Board", Vector3.new(8, 6, 0.4), CFrame.new(16, 5, z))
+	local boardSign = BG.Layers.place(part("RoadSign", Vector3.new(6, 0.2, 4), CFrame.new()), board, { face = "Front" })
+	local line = BG.Layers.place(part("RoadLine", Vector3.new(10, 0.1, 0.5), CFrame.new()), road, { layer = 1 })
+	part("LampPole", Vector3.new(0.6, 10, 0.6), CFrame.new(-18, 5, z))
+	local head = part("StreetLight", Vector3.new(4, 0.5, 1.5), CFrame.new(-18, 10.25, z - 0.4))
+	local watched = { exit, sign, boardSign, line, head }
+	local before = {}
+	for _, p in watched do
+		before[p] = p.CFrame
+	end
+	local report = BG.scan(root, { world = world })
+	expect(#report.issues == 0, BG.format(report))
+	BG.fixAll(root, { world = world })
+	for p, cf in before do
+		near((p.CFrame.Position - cf.Position).Magnitude, 0, 1e-5, p.Name .. " moved")
+	end
+end)
+
+T.section("Roads: headroom")
+
+-- Road_Under on the ground, piers beside it and a Road_* deck on them whose
+-- underside is `clear` above the road's top.
+local function overpass(part, clear)
+	local thin = D.maxLedge - D.roadLift - 0.1
+	local bottom = D.roadLift + thin + clear
+	local under = part("Road_Under", Vector3.new(30, thin, W), CFrame.new(0, D.roadLift + thin / 2, 0))
+	for _, side in { -1, 1 } do
+		part("Pier", Vector3.new(W, bottom - D.roadLift, 2), CFrame.new(0, (bottom - D.roadLift) / 2, side * (W / 2 + 2)))
+	end
+	local deck = part("Road_Overpass", Vector3.new(W, 0.8, W + 8), CFrame.new(0, bottom + 0.4, 0))
+	return under, deck
+end
+
+test("headroom: a road deck (named Road_*) over a road is a ceiling, low or high", function()
+	for _, clear in { 3.5, 6.5 } do
+		local root, world, part = setup()
+		local under = overpass(part, clear)
+		local report = BG.scan(root, { world = world, config = { roadHeadroom = 10 } })
+		local h = checks(report, "headroom")
+		expect(#h == 1 and h[1].parts[1] == under, BG.format(report))
+		expect(has(h[1].message, "under Workspace/Road_Overpass at ("), h[1].message)
+		near(h[1].value, clear, 1e-3, "clear height")
+		local enough = BG.scan(root, { world = world, config = { roadHeadroom = clear - 0.5 } })
+		expect(#checks(enough, "headroom") == 0, BG.format(enough))
+	end
+end)
+
+test("headroom: overlapping junction pieces and rails on their bed are not ceilings", function()
+	local root, world, part = setup()
+	local thin = D.maxLedge - D.roadLift - 0.1
+	local y = D.roadLift + thin / 2
+	part("Road_Main", Vector3.new(40, thin, W), CFrame.new(0, y, 0))
+	part("Road_Junction", Vector3.new(W, thin, W), CFrame.new(10, y, 0))
+	part("Road_JunctionHigh", Vector3.new(W, thin, W), CFrame.new(-10, y + 0.1, 0))
+	-- Rails resting on a track bed, even with a big rail lift.
+	local railLift = 0.6
+	local bedTop = D.trackLift + 0.5
+	part("TrackBed", Vector3.new(24, 0.5, 4), CFrame.new(0, D.trackLift + 0.25, 60))
+	for _, z in { -0.7, 0.7 } do
+		part("Rail_OnBed", Vector3.new(23, 0.3, 0.3), CFrame.new(0, bedTop + railLift + 0.15, 60 + z))
+	end
+	local config = { roadHeadroom = 10, railHeadroom = 10, trackHeadroom = 10, railLift = railLift }
+	local report = BG.scan(root, { world = world, config = config })
+	expect(#checks(report, "headroom") == 0, BG.format(report))
+end)
+
+T.section("Roads: wedge ramps")
+
+-- A WedgePart ramp `run` long rising `rise`, resting on the ground with its
+-- foot at x = `foot` and its high end towards +X.
+local function wedge(root, name, rise, run, foot)
+	local p = Instance.new("WedgePart")
+	p.Name = name
+	p.Size = Vector3.new(W, rise, run)
+	p.CFrame = CFrame.new(foot + run / 2, D.roadLift + rise / 2, 0) * CFrame.Angles(0, math.pi / 2, 0)
+	p.Anchored = true
+	p.Parent = root
+	return p
+end
+
+-- Barriers along both open sides of a ramp from x = foot.
+local function barriers(part, run, foot, height)
+	for _, side in { -1, 1 } do
+		part("Barrier", Vector3.new(run, height, 1), CFrame.new(foot + run / 2, height / 2, side * (W / 2 + 0.5)))
+	end
+end
+
+test("wedge ramp: its slope is the driving surface (foot edge, joins, route slope)", function()
+	local root, world, part = setup()
+	local rise, run = 2, 12
+	local ramp = wedge(root, "Road_Ramp", rise, run, 0)
+	barriers(part, run, 0, rise + 1)
+	-- A road on a plinth at the top, level with the ramp's high end.
+	local top = D.roadLift + rise
+	part("Plinth", Vector3.new(21, top - 0.8 - D.roadLift, W + 2), CFrame.new(run + 10.5, (top - 0.8 - D.roadLift) / 2, 0))
+	part("Road_Top", Vector3.new(20, 0.8, W), CFrame.new(run + 10, top - 0.4, 0))
+	local report = BG.scan(root, { world = world })
+	expect(#report.issues == 0, "the foot is at ground level, the top meets Road_Top:\n" .. BG.format(report))
+	-- A road at the foot, 0.8 above it.
+	part("Road_Low", Vector3.new(20, 0.8, W), CFrame.new(-10, D.roadLift + 0.4, 0))
+	report = BG.scan(root, { world = world, config = { maxLedge = 0.5 } })
+	local ledges = checks(report, "ledge")
+	expect(#ledges == 1 and table.find(ledges[1].parts, ramp), BG.format(report))
+	near(ledges[1].value, 0.8, 1e-3, "the real step down onto the foot")
+	near(ledges[1].position.X, 0, 1e-3, "at the foot")
+end)
+
+test("wedge ramp: a steep one gets routeslope from its slope; a crate on its low end buries it", function()
+	local root, world = setup()
+	local steep = wedge(root, "Ramp_Steep", 8, 4, 0)
+	steep:SetAttribute("BuildGuardKind", "Road")
+	local report = BG.scan(root, { world = world })
+	local slopes = checks(report, "routeslope")
+	expect(#slopes == 1 and slopes[1].parts[1] == steep, BG.format(report))
+	near(slopes[1].value, math.deg(math.atan2(8, 4)), 1e-2, "slope angle")
+	near(slopes[1].position.Y, D.roadLift + 4, 1e-3, "middle of the slope")
+
+	local root2, world2, part2 = setup()
+	local ramp = wedge(root2, "Road_Ramp", 2, 12, 0)
+	barriers(part2, 12, 0, 3)
+	-- Resting on the slope near the foot, well below the wedge's box top.
+	part2("Crate", Vector3.new(3, 1, 3), CFrame.new(2.5, D.roadLift + 2 * 4 / 12 + 0.5, 0))
+	local buried = checks(BG.scan(root2, { world = world2 }), "buried")
+	expect(#buried == 1 and buried[1].parts[1] == ramp, "crate on the slope")
+end)
+
+T.section("Roads: small gaps, tagged floors and upside-down pieces")
+
+test("ledge: two pieces a small gap apart (under edgeProbe) are still a join", function()
+	local root, world, part = setup()
+	local step = D.maxLedge + 1
+	local gap = 0.3
+	local low = part("Road_Low", Vector3.new(20, 0.8, W), CFrame.new(-10, D.roadLift + 0.4, 0))
+	part("Plinth", Vector3.new(21, step, W + 2), CFrame.new(gap + 10.5, step / 2, 0))
+	local high = part("Road_High", Vector3.new(20, 0.8, W), CFrame.new(gap + 10, step + D.roadLift + 0.4, 0))
+	local report = BG.scan(root, { world = world })
+	local ledges = checks(report, "ledge")
+	expect(#ledges == 1 and table.find(ledges[1].parts, low) and table.find(ledges[1].parts, high), BG.format(report))
+	near(ledges[1].value, step, 1e-3, "step")
+	expect(#checks(report, "edge") == 0, BG.format(report))
+end)
+
+test("edge: a floor whose folder is tagged BuildGuardGround is ground beside the road", function()
+	local root, world, part = setup()
+	root.Ground:Destroy()
+	local floor = Instance.new("Folder")
+	floor.Name = "MapFloor"
+	floor:AddTag("BuildGuardGround")
+	floor.Parent = root
+	for i = -1, 1 do
+		part("Tile", Vector3.new(200, 2, 200), CFrame.new(i * 200, -1, 0), floor)
+	end
+	local road = roadOn(part, "Road_Thick", 30, D.maxLedge + 0.5, CFrame.new())
+	local edges, count = edgesOf(BG.scan(root, { world = world }), road)
+	expect(count == 4, "every edge")
+	near(edges["+Z"].value, D.maxLedge + 0.5 + D.roadLift, 1e-3, "step from the tile")
+	floor:RemoveTag("BuildGuardGround")
+	expect(select(2, edgesOf(BG.scan(root, { world = world }), road)) == 0, "untagged tiles are just parts (kerbs)")
+end)
+
+test("an upside-down road is checked on the face that's up", function()
+	local root, world, part = setup()
+	local thin = D.maxLedge - D.roadLift - 0.1
+	local flip = CFrame.Angles(math.pi, 0, 0)
+	local resting = part("Road_Flipped", Vector3.new(30, thin, W), CFrame.new(0, D.roadLift + thin / 2, 0) * flip)
+	local report = BG.scan(root, { world = world })
+	expect(#report.issues == 0, BG.format(report))
+	-- A crate on the face that's up buries it.
+	local crate = part("Crate", Vector3.new(3, 3, 3), CFrame.new(4, D.roadLift + thin + 1.5, 0))
+	local buried = checks(BG.scan(root, { world = world }), "buried")
+	expect(#buried == 1 and buried[1].parts[1] == resting, "crate on top")
+	crate:Destroy()
+	-- Hovering: reported and snapped down, keeping its rotation.
+	local hover = part("Road_FlippedHover", Vector3.new(30, thin, W), CFrame.new(0, 3, 60) * flip)
+	local look = hover.CFrame.LookVector
+	report = BG.scan(root, { world = world })
+	local off = checks(report, "offground")
+	expect(#off == 1 and off[1].parts[1] == hover and BG.isFixable(off[1]), BG.format(report))
+	near(off[1].position.Y, 3 - thin / 2, 1e-3, "bottom centre")
+	BG.fixAll(root, { world = world })
+	near(hover.CFrame.Position.Y - thin / 2, D.roadLift, 1e-3, "landed with its lift")
+	near((hover.CFrame.LookVector - look).Magnitude, 0, 1e-5, "same rotation")
+	-- A thick one: edges named by the part's own axes, on the face that's up.
+	local thick = part("Road_FlippedThick", Vector3.new(30, 1.5, W), CFrame.new(0, D.roadLift + 0.75, 120) * flip)
+	local edges, count = edgesOf(BG.scan(root, { world = world }), thick)
+	expect(count == 4, "every edge")
+	local lp = thick.CFrame:PointToObjectSpace(edges["+Z"].position)
+	near(lp.Z, W / 2, 1e-3, "on the part's own +Z edge")
+	near(lp.Y, -0.75, 1e-3, "on the face that's up")
 end)
