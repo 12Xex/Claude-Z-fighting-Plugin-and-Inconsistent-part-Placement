@@ -66,8 +66,9 @@ Set with `BG.setConfig` (or `BG.setProjectConfig` for the whole place), stored a
 | `zFightNudge` | 0.02 | 0.002–0.5 | Gap a z-fight fix leaves; must be > 0.01 |
 | `zFightViewDistance` | 0 (off) | 0–5000 | Distance the model is seen from. Faces must be `2 × d² / (0.1 × 2²⁴)` apart (0.107 at 300 studs; never less than `zFightNudge`), fixes leave that gap, and layers lift at least that much. Under about 130 studs it adds nothing. For map-sized models seen from far away on phones. |
 | `layerLift` | 0.05 | 0.002–0.5 | Lift per layer (read from the surface) |
-| `roadLift` / `railLift` / `trackLift` | 0.1 / 0.2 / 0.1 | 0–2 | Gap a snap leaves under roads / rails / track beds |
-| `groundLift` | 0.1 | 0–2 | Gap a snap leaves under anything else |
+| `roadLift` / `trackLift` | 0 / 0 | −2–2 | Where a snap puts the bottom of roads / track beds, from the highest ground under them: 0 rests them on it, negative sinks them in. They only sink into terrain or ground parts (never into a support, and wedges never sink), and their top always stays 0.05 above the ground. |
+| `railLift` | 0.2 | 0–2 | Gap a snap leaves under rails (room for sleepers) |
+| `groundLift` | 0 | −2–2 | Like `roadLift`, for anything else you snap |
 | `gridSize` | 4 | 0.05–512 | Horizontal layout grid for `snapToGrid` |
 | `groundTolerance` | 0.1 | 0.01–10 | Off-ground check fires beyond this |
 | `flatTiltDegrees` | 5 | 0–45 | Steeper parts count as ramps |

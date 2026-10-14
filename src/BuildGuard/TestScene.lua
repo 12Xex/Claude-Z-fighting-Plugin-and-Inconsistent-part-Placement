@@ -59,6 +59,7 @@
 ]]
 
 local Layers = require(script.Parent.Layers)
+local Ground = require(script.Parent.Checks.Ground)
 local TestCases = require(script.Parent.TestCases)
 
 local TestScene = {}
@@ -124,9 +125,17 @@ function TestScene.build(parent, world, config, origin)
 
 	local W = config.minRoadWidth
 	-- Road thickness: thin enough that the step up from the ground stays under maxLedge.
+	-- Roads sit where a snap leaves them: their kind's lift above the ground
+	-- (a negative lift sinks them in, limited by their thickness).
+	local function liftFor(thickness)
+		return Ground.effectiveLift(config.roadLift, thickness)
+	end
+	-- Roads on a support (a plinth, abutments) and wedge ramps never sink.
+	local onSupport = Ground.effectiveLift(config.roadLift, 1, false)
 	local T = math.clamp(config.maxLedge - config.roadLift - 0.1, 0.2, 1)
-	local roadY = config.roadLift + T / 2 -- centre of a road resting on the ground
-	local roadTop = config.roadLift + T
+	local lift = liftFor(T)
+	local roadY = lift + T / 2 -- centre of a road resting on the ground
+	local roadTop = lift + T
 	local railY = config.railLift + 0.25 -- centre of a 0.5-stud rail on the ground
 	-- A road piece on its own is measured across its shorter side, so lone
 	-- pieces are longer than they are wide.
@@ -195,7 +204,7 @@ function TestScene.build(parent, world, config, origin)
 	-- The plinth reaches a stud past the raised road's sides and far end, so
 	-- the ground beside that road is the plinth, not a drop.
 	part("Plinth", Vector3.new(21, ledge, W + 2), CFrame.new(20.5, ledge / 2, zA), Color3.fromRGB(170, 170, 160), Enum.Material.Concrete)
-	plant(road("Road_B_Raised", Vector3.new(20, T, W), CFrame.new(20, ledge + roadY, zA)), "P9", "ledge", "flag", ("%.2f stud step"):format(ledge))
+	plant(road("Road_B_Raised", Vector3.new(20, T, W), CFrame.new(20, ledge + onSupport + T / 2, zA)), "P9", "ledge", "flag", ("%.2f stud step"):format(ledge))
 	local steepRoad = road("Road_C_Steep", Vector3.new(16, T, W), CFrame.new(-10, roadTop, zA) * CFrame.Angles(0, 0, -math.rad(steep)) * CFrame.new(-8, -T / 2, 0))
 	-- Steeper than 45° a name alone doesn't make a road (it could be a sign).
 	steepRoad:SetAttribute("BuildGuardKind", "Road")
@@ -211,8 +220,9 @@ function TestScene.build(parent, world, config, origin)
 	control(Layers.place(part("StopLine", Vector3.new(0.6, 0.1, 10), CFrame.new(), PAINT), good, { layer = 1, u = 10, config = config }))
 	control(Layers.place(part("Arrow", Vector3.new(3, 0.1, 0.6), CFrame.new(), PAINT), good, { layer = 2, u = 10, config = config }))
 	control(part("Rail_Good", Vector3.new(20, 0.5, 1), CFrame.new(-60, railY, R), Color3.fromRGB(110, 110, 120), Enum.Material.Metal))
-	local bedTop = config.trackLift + 0.5
-	control(part("TrackBed_Good", Vector3.new(24, 0.5, 4), CFrame.new(-60, config.trackLift + 0.25, 2 * R), Color3.fromRGB(120, 105, 90), Enum.Material.Slate))
+	local bedLift = Ground.effectiveLift(config.trackLift, 0.5)
+	local bedTop = bedLift + 0.5
+	control(part("TrackBed_Good", Vector3.new(24, 0.5, 4), CFrame.new(-60, bedLift + 0.25, 2 * R), Color3.fromRGB(120, 105, 90), Enum.Material.Slate))
 	for _, z in { -0.7, 0.7 } do
 		control(part("Rail_OnBed", Vector3.new(23, 0.3, 0.3), CFrame.new(-60, bedTop + config.railLift + 0.15, 2 * R + z), Color3.fromRGB(110, 110, 120), Enum.Material.Metal))
 	end
@@ -235,10 +245,10 @@ function TestScene.build(parent, world, config, origin)
 	mine:SetAttribute("BuildGuard_roadHeadroom", 14)
 	mine:SetAttribute("BuildGuardConfigReason", "haul truck is 13 studs tall")
 	mine.Parent = folder
-	local tunnelRoad = road("Road_Tunnel", Vector3.new(L, T, W), CFrame.new(tx, config.roadLift + 0.5 + T / 2, -2))
+	local tunnelRoad = road("Road_Tunnel", Vector3.new(L, T, W), CFrame.new(tx, lift + 0.5 + T / 2, -2))
 	tunnelRoad.Parent = mine
 	plant(tunnelRoad, "P13", "offground", "fix", "hovering 0.5 in a tunnel under a thin roof")
-	planted[#planted].expectBottomY = origin.Y + config.roadLift
+	planted[#planted].expectBottomY = origin.Y + lift
 	table.insert(planted, { id = "P14", part = tunnelRoad, check = "headroom", expect = "flag", note = "roof 12 up, needs 14" })
 	control(part("Rail_Tunnel", Vector3.new(20, 0.5, 1), CFrame.new(tx, railY, W / 2 + 4), Color3.fromRGB(110, 110, 120), Enum.Material.Metal)).Parent = mine
 
@@ -286,11 +296,11 @@ function TestScene.build(parent, world, config, origin)
 	-- P16: a road piece on its own, too thick to drive up onto from the ground.
 	local thick = math.min(config.maxLedge + 0.5, (config.maxLedge + config.connectMaxStep) / 2)
 	plant(
-		road("Road_Thick", Vector3.new(L, thick, W), CFrame.new(60, config.roadLift + thick / 2, -3 * R)),
+		road("Road_Thick", Vector3.new(L, thick, W), CFrame.new(60, liftFor(thick) + thick / 2, -3 * R)),
 		"P16",
 		"edge",
 		"flag",
-		("%.2f-stud step up from the ground"):format(thick + config.roadLift)
+		("%.2f-stud step up from the ground"):format(thick + liftFor(thick))
 	)
 
 	local CONCRETE = Color3.fromRGB(170, 170, 160)
@@ -313,7 +323,7 @@ function TestScene.build(parent, world, config, origin)
 		under.Parent = overpasses
 		local bottom = roadTop + clear
 		for _, side in { -1, 1 } do
-			local h = bottom - config.roadLift
+			local h = bottom - onSupport
 			part("Abutment", Vector3.new(W, h, 2), CFrame.new(x, h / 2, zA + side * (W / 2 + 2)), CONCRETE, Enum.Material.Concrete).Parent = overpasses
 		end
 		control(road("Road_Overpass" .. suffix, Vector3.new(W, deckT, W + 8), CFrame.new(x, bottom + deckT / 2, zA))).Parent = overpasses
@@ -329,7 +339,7 @@ function TestScene.build(parent, world, config, origin)
 	local zW = -3 * R
 	local function wedgeRoad(name, size, footX)
 		-- The slope rises towards local +Z; turned so it rises towards +X.
-		local cframe = CFrame.new(footX + size.Z / 2, config.roadLift + size.Y / 2, zW) * CFrame.Angles(0, math.pi / 2, 0)
+		local cframe = CFrame.new(footX + size.Z / 2, onSupport + size.Y / 2, zW) * CFrame.Angles(0, math.pi / 2, 0)
 		return part(name, size, cframe, ASPHALT, Enum.Material.Asphalt, "WedgePart")
 	end
 	-- Pieces joined end to end only need W across the join, so they're kept
@@ -340,8 +350,8 @@ function TestScene.build(parent, world, config, origin)
 	for _, side in { -1, 1 } do
 		part("Guardrail", Vector3.new(run, rise + 1, 1), CFrame.new(x0 + run / 2, (rise + 1) / 2, zW + side * (W / 2 + 0.5)), METAL, Enum.Material.Metal)
 	end
-	local rampTop = config.roadLift + rise
-	local plinthH = rampTop - T - config.roadLift
+	local rampTop = onSupport + rise
+	local plinthH = rampTop - T - onSupport
 	part("Plinth", Vector3.new(9, plinthH, W + 2), CFrame.new(x0 + run + 4.5, plinthH / 2, zW), CONCRETE, Enum.Material.Concrete)
 	control(road("Road_WedgeTop", Vector3.new(8, T, W), CFrame.new(x0 + run + 4, rampTop - T / 2, zW)))
 	local wedgeSteep = math.min(steep + 5, 80)
@@ -359,7 +369,7 @@ function TestScene.build(parent, world, config, origin)
 	local xg = -170
 	road("Road_GapLow", Vector3.new(8, T, W), CFrame.new(xg, roadY, zM))
 	part("Plinth", Vector3.new(9, ledge, W + 2), CFrame.new(xg + 8.5 + gap, ledge / 2, zM), CONCRETE, Enum.Material.Concrete)
-	plant(road("Road_GapHigh", Vector3.new(8, T, W), CFrame.new(xg + 8 + gap, ledge + roadY, zM)), "P30", "ledge", "flag", ("%.2f step across a %.2f gap"):format(ledge, gap))
+	plant(road("Road_GapHigh", Vector3.new(8, T, W), CFrame.new(xg + 8 + gap, ledge + onSupport + T / 2, zM)), "P30", "ledge", "flag", ("%.2f step across a %.2f gap"):format(ledge, gap))
 
 	-- A road built upside down (a block looks the same either way up),
 	-- resting on the ground: a control, checked on the face that's up.
@@ -375,11 +385,11 @@ function TestScene.build(parent, world, config, origin)
 	local padTop, zY = 1, 3 * R
 	part("YardPad", Vector3.new(2 * L + 20, padTop, W + 22), CFrame.new(-150, padTop / 2, zY), CONCRETE, Enum.Material.Concrete).Parent = yard
 	plant(
-		road("Road_YardThick", Vector3.new(L, thick, W), CFrame.new(-150 - L / 2 - 5, padTop + config.roadLift + thick / 2, zY)),
+		road("Road_YardThick", Vector3.new(L, thick, W), CFrame.new(-150 - L / 2 - 5, padTop + liftFor(thick) + thick / 2, zY)),
 		"P31",
 		"edge",
 		"flag",
-		("%.2f-stud step up from a pad that's ground by its folder's tag"):format(thick + config.roadLift)
+		("%.2f-stud step up from a pad that's ground by its folder's tag"):format(thick + liftFor(thick))
 	)
 	control(road("Road_YardThin", Vector3.new(L, T, W), CFrame.new(-150 + L / 2 + 5, padTop + roadY, zY)))
 

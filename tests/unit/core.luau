@@ -630,6 +630,8 @@ for _, case in {
 	{ config = {} },
 	{ config = { maxLedge = 0.5, maxSlopeChange = 8 } },
 	{ config = { maxSlopeChange = 30 }, place = { maxLedge = 0.8, minRoadWidth = D.minRoadWidth + 2 } },
+	-- Roads and track beds sunk into the ground place-wide.
+	{ config = {}, place = { roadLift = -0.3, trackLift = -0.2 } },
 } do
 	local label = {}
 	for k, v in case.config do

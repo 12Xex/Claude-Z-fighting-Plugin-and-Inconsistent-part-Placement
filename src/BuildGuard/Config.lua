@@ -67,11 +67,15 @@ Config.defaults = {
 	layerLift = 0.05,
 
 	-- Roads / rails / tracks ---------------------------------------------------
-	-- Gap left between a snapped part and the surface under it, per kind.
-	roadLift = 0.1,
-	railLift = 0.2, -- rails above their road/track bed
-	trackLift = 0.1,
-	groundLift = 0.1, -- anything else you snap
+	-- Where a snapped part's bottom ends up, per kind, measured from the
+	-- highest ground under it: 0 rests it on the ground; a negative value
+	-- sinks it in (on bumpy terrain, so the ground meets its sides instead of
+	-- leaving gaps under it). Its top always stays at least
+	-- Ground.MIN_TOP (0.05) above that ground, so it's never buried.
+	roadLift = 0,
+	railLift = 0.2, -- rails above their road/track bed (room for sleepers)
+	trackLift = 0,
+	groundLift = 0, -- anything else you snap
 	-- Horizontal grid for laying out roads, rails and buildings (BG.snapToGrid).
 	-- Matches Roblox's 4-stud terrain voxels. Never applied to heights or detail.
 	gridSize = 4,
@@ -154,10 +158,10 @@ Config.schema = {
 	meshTriangleLimit = { scope = "global", min = 0, max = 1e6 },
 	meshOverlapRatio = { scope = "global", min = 0.5, max = 1 },
 	layerLift = { min = 0.002, max = 0.5 },
-	roadLift = { min = 0, max = 2 },
+	roadLift = { min = -2, max = 2 },
 	railLift = { min = 0, max = 2 },
-	trackLift = { min = 0, max = 2 },
-	groundLift = { min = 0, max = 2 },
+	trackLift = { min = -2, max = 2 },
+	groundLift = { min = -2, max = 2 },
 	gridSize = { min = 0.05, max = 512 },
 	groundTolerance = { min = 0.01, max = 10 },
 	snapSearchUp = { min = 0, max = 1000 },

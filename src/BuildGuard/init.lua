@@ -36,7 +36,7 @@ local BuildGuard = {}
 
 -- Matches the Claude plugin's version; the skill checks it so an old copy in
 -- ServerStorage gets reinstalled.
-BuildGuard.VERSION = "0.6.0"
+BuildGuard.VERSION = "0.6.1"
 
 BuildGuard.Config = Config
 BuildGuard.Geometry = Geometry

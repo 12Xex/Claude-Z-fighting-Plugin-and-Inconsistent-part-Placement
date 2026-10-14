@@ -302,6 +302,67 @@ test("every road check names parts by path and gives a position", function()
 	located(find("edge", thick), true)
 end)
 
+T.section("Roads: resting on the ground")
+
+test("snapped roads rest right on the ground by default: no gap under them, no z-fight", function()
+	local root, world, part = setup()
+	local road = part("Road_Hover", Vector3.new(30, 0.8, W), CFrame.new(0, 2, 0))
+	BG.fixAll(root, { world = world })
+	local bottom = road.CFrame.Position.Y - 0.4
+	expect(math.abs(bottom) < 1e-3, ("bottom at %.3f, ground top at 0"):format(bottom))
+	local report = BG.scan(root, { world = world })
+	expect(report.counts.error == 0 and report.counts.warning == 0, BG.format(report))
+end)
+
+test("a negative roadLift sinks roads into the ground, never so far that they're buried", function()
+	local root, world, part = setup()
+	root:SetAttribute("BuildGuard_roadLift", -0.3)
+	root:SetAttribute("BuildGuardConfigReason", "roads sit into the terrain")
+	local road = part("Road_Main", Vector3.new(30, 0.8, W), CFrame.new(0, 2, 0))
+	-- Sinking further than the road is thick would bury it: its top stays
+	-- 0.05 above the ground.
+	local deep = Instance.new("Model")
+	deep.Name = "Deep"
+	deep:SetAttribute("BuildGuard_roadLift", -2)
+	deep:SetAttribute("BuildGuardConfigReason", "test")
+	deep.Parent = root
+	local thin = part("Road_Thin", Vector3.new(30, 0.8, W), CFrame.new(60, 2, 0), deep)
+	BG.fixAll(root, { world = world })
+	local function bottomOf(p)
+		return p.CFrame.Position.Y - p.Size.Y / 2
+	end
+	expect(math.abs(bottomOf(road) + 0.3) < 1e-3, ("sunk 0.3: bottom at %.3f"):format(bottomOf(road)))
+	expect(math.abs(bottomOf(thin) - (0.05 - 0.8)) < 1e-3, ("top kept 0.05 up: bottom at %.3f"):format(bottomOf(thin)))
+	local report = BG.scan(root, { world = world })
+	for _, check in { "buried", "offground", "edge" } do
+		expect(#checks(report, check) == 0, BG.format(report))
+	end
+	-- A road resting on the ground is now 0.3 too high, and says so.
+	road.CFrame += Vector3.new(0, 0.3, 0)
+	local again = checks(BG.scan(root, { world = world }), "offground")
+	expect(#again == 1 and again[1].parts[1] == road, "resting road not reported as 0.3 too high")
+end)
+
+test("roads only sink into real ground: not into a plinth, and a wedge ramp never sinks", function()
+	local root, world, part = setup()
+	root:SetAttribute("BuildGuard_roadLift", -0.3)
+	root:SetAttribute("BuildGuardConfigReason", "roads sit into the terrain")
+	part("Plinth", Vector3.new(34, 2, W + 4), CFrame.new(0, 1, 0))
+	local raised = part("Road_Raised", Vector3.new(30, 0.8, W), CFrame.new(0, 3, 0))
+	local ramp = Instance.new("WedgePart")
+	ramp.Name, ramp.Size, ramp.Anchored = "Road_Ramp", Vector3.new(W, 2, 16), true
+	ramp.CFrame = CFrame.new(60, 1.5, 0)
+	ramp.Parent = root
+	BG.fixAll(root, { world = world })
+	local function bottomOf(p)
+		return p.CFrame.Position.Y - p.Size.Y / 2
+	end
+	expect(math.abs(bottomOf(raised) - 2) < 1e-3, ("rests on the plinth: bottom at %.3f"):format(bottomOf(raised)))
+	expect(math.abs(bottomOf(ramp)) < 1e-3, ("wedge rests on the ground: bottom at %.3f"):format(bottomOf(ramp)))
+	local report = BG.scan(root, { world = world })
+	expect(#checks(report, "buried") == 0 and #checks(report, "offground") == 0, BG.format(report))
+end)
+
 T.section("Roads: locked pieces")
 
 test("snaps never move a locked road: reported, not fixed; an unlocked twin is", function()

@@ -9,7 +9,7 @@ Check the build at `$ARGUMENTS` (use `workspace` if nothing was given) with Buil
 
 1. Confirm the library exists and is current:
    `local m = game.ServerStorage:FindFirstChild("BuildGuard") return if m then require(m).VERSION else "missing"`.
-   If it's missing or not `0.6.0`, tell the user to install the BuildGuard Studio plugin and press **Install library**, then stop.
+   If it's missing or not `0.6.1`, tell the user to install the BuildGuard Studio plugin and press **Install library**, then stop.
 2. Run the check. For one model:
    ```lua
    local BG = require(game.ServerStorage.BuildGuard)

@@ -19,7 +19,7 @@ return if m then "BuildGuard " .. tostring(require(m).VERSION) else "BuildGuard 
 ```
 
 - **Missing:** stop and ask the user to install the BuildGuard Studio plugin and press **Install library** in its panel. Don't build without it.
-- **Not `"0.6.0"`:** the place has an old copy. Ask the user to press **Install library** again, then re-run the check.
+- **Not `"0.6.1"`:** the place has an old copy. Ask the user to press **Install library** again, then re-run the check.
 
 For the step-by-step order to build each kind of thing (session start, landscape, roads, rails, tunnels and caves, rivers, buildings, signs and details, meshes, vehicles, NPCs) and how to report back, follow [workflows.md](workflows.md).
 
@@ -43,8 +43,8 @@ For the step-by-step order to build each kind of thing (session start, landscape
   BG.apply(plan)
   return BG.Plan.describe(plan) .. ("\n%d skipped"):format(#skipped)
   ```
-  Name them so their **first word** is `Road`/`Street`/`Highway`, `Rail`/`Railroad`, or `Track` (`Road_North_01`, not `HaulRoad_01`), and build them flat side up: a road at least 4 studs wide, top within 45° of level. Or tag them `Road`/`Rail`/`Track`, or set `BuildGuardKind`; tags and the attribute count whatever the shape. Other names and shapes are safe: `StreetLamp`, `RoadSign`, `Highway_Exit` signs, `Road_Guardrail`, `RoadBarrier`, `RailFence`, `StreetLight` heads, `Road_Kerb` strips, `BedRail`, `Railing` and anything placed with Layers (a `RoadLine` marking, a sign on a board) are never treated as roads or rails. Ramps (tilted over 5°) aren't snapped. Snapping leaves roads 0.1 and rails 0.2 above whatever is under them, and never moves ignored parts or parts of a vehicle (they're listed in `skipped`).
-- **Roads must be thin enough to drive onto.** The step from the ground beside a road up onto its top must stay within the 1-stud ledge limit. A snapped road sits 0.1 above the ground, so make road parts **0.8 studs thick** (never more than 0.9), or shape the terrain up to the road's top.
+  Name them so their **first word** is `Road`/`Street`/`Highway`, `Rail`/`Railroad`, or `Track` (`Road_North_01`, not `HaulRoad_01`), and build them flat side up: a road at least 4 studs wide, top within 45° of level. Or tag them `Road`/`Rail`/`Track`, or set `BuildGuardKind`; tags and the attribute count whatever the shape. Other names and shapes are safe: `StreetLamp`, `RoadSign`, `Highway_Exit` signs, `Road_Guardrail`, `RoadBarrier`, `RailFence`, `StreetLight` heads, `Road_Kerb` strips, `BedRail`, `Railing` and anything placed with Layers (a `RoadLine` marking, a sign on a board) are never treated as roads or rails. Ramps (tilted over 5°) aren't snapped. Snapping rests roads right on whatever is under them (no gap) and rails 0.2 above their bed, and never moves ignored, locked or vehicle parts (they're listed in `skipped`). If the user wants roads sunk into bumpy terrain, so the ground meets their sides instead of leaving gaps under them, that's a negative `roadLift` set place-wide with their OK: `BG.setProjectConfig({ roadLift = -0.3 }, "roads sit into the terrain")`. A road only sinks into terrain or ground parts, never into a plinth or bridge support, wedge ramps never sink, and its top always stays 0.05 above the ground.
+- **Roads must be thin enough to drive onto.** The step from the ground beside a road up onto its top must stay within the 1-stud ledge limit. A snapped road rests right on the ground, so its thickness is the step: make road parts **0.8 studs thick** (never more than 1), sink them with a negative `roadLift`, or shape the terrain up to the road's top.
 - **Nothing sits on top of a road, rail or track bed** except layered items (markings, sleepers). Buildings, crates, terrain and props must stay off them.
 - **Roads and rails must be drivable by a loaded truck.** The project limits are:
   - every road at least **22 studs wide** across its driving direction;

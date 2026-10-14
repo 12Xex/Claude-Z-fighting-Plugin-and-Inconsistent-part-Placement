@@ -8,7 +8,7 @@ local BG = require(game.ServerStorage.BuildGuard)
 
 ## Every session
 
-1. Run the check from SKILL.md step 0 (installed, and version `"0.6.0"`).
+1. Run the check from SKILL.md step 0 (installed, and version `"0.6.1"`).
 2. Find where things go. Print the top level of `workspace` and the model you'll work in, so you build into the user's existing structure:
    ```lua
    local out = {}
@@ -34,7 +34,7 @@ local BG = require(game.ServerStorage.BuildGuard)
 
 ## Roads
 
-1. Lay each piece flat with its top face up. Size it as length × 0.8 × width, with the width (at least 22) on the other horizontal axis. The 0.8 thickness keeps the step from the ground onto the road (thickness + 0.1 lift) under the 1-stud limit. Name it so its first word is `Road` (`Road_01`, `Road_North_3`), and put it on the grid with `BG.snapToGrid`:
+1. Lay each piece flat with its top face up. Size it as length × 0.8 × width, with the width (at least 22) on the other horizontal axis. A snapped road rests right on the ground, so the 0.8 thickness is the step from the ground onto it, under the 1-stud limit. Name it so its first word is `Road` (`Road_01`, `Road_North_3`), and put it on the grid with `BG.snapToGrid`:
    ```lua
    local roads = Instance.new("Model")
    roads.Name = "HaulRoad_North"
@@ -185,6 +185,6 @@ After each model, tell the user:
 | The check is slow or times out | Use `BG.startCheck(root)` and poll `BG.jobStatus(id)`, or check one model at a time. The report's `Time:` line shows which check is slow. |
 | `Meshes: ... by box only (no permission ...)` | Those meshes belong to another creator, so their triangles can't be read and they weren't checked for z-fighting. Check them by eye, or re-upload them under the user's account. |
 | `duplicate` | A mesh or part imported twice at the same place. Delete one. |
-| `edge` | The road's top is more than 1 stud above (or below) the ground beside it. Use 0.8-thick roads, raise the terrain to the road, or (on a ramp's sides) add guardrails. |
+| `edge` | The road's top is more than 1 stud above (or below) the ground beside it. Use 0.8-thick roads, raise the terrain to the road, sink roads with a negative `roadLift` (with the user's OK), or (on a ramp's sides) add guardrails. |
 | `zgap` | In a far-view model, same-facing faces are closer than the gap that holds at its view distance. Apply the fix. |
 | `no wheels found` (checkVehicle) | The wheels don't spin on hinges and aren't named `Wheel_FL`/`Tire_RearLeft` and so on. Tag them `BuildGuardWheel`. |

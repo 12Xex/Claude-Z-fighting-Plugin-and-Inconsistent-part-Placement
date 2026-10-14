@@ -103,7 +103,9 @@ end
 -- crate dumped on a road. `road` is a road part to stand them next to.
 function TestCases.names(b, road)
 	local cf, half = road.CFrame, road.Size / 2
-	local edge = cf * CFrame.new(0, -half.Y, half.Z + 3)
+	-- On the ground (the scene's origin height) 3 studs past the road's edge.
+	local beside = cf:PointToWorldSpace(Vector3.new(0, 0, half.Z + 3))
+	local edge = CFrame.new(beside.X, b.base.Position.Y, beside.Z) * cf.Rotation
 	local function stand(name, size, offset)
 		local x = b.part(name, size, CFrame.new(), STEEL)
 		x.CFrame = edge * CFrame.new(offset, size.Y / 2, 0)

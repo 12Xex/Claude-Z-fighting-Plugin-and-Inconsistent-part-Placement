@@ -9,7 +9,7 @@ A Roblox Studio plugin (and a library you can call from the command bar or an MC
 | **Far view** | `zFightViewDistance` on a map-sized model makes its faces keep the gap that still holds at that distance on a phone's 24-bit depth buffer (0.107 at 300 studs; under about 130 studs the usual 0.02 holds). The plugin's **Far-view test rig** shows which gaps flicker on a real phone. | Nudge to that gap, keeping the face in front in front |
 | **Layer offsets** | `Layers.place(item, surface, { layer = n })` puts markings, signs and trim on a face, lifted `n × layerLift` | Prevents z-fighting in the first place |
 | **Buried-part check** | Samples every road/rail/track driving surface (its top, or a wedge ramp's slope) every 2 studs and flags any spot under terrain or another part | Snap onto the ground if the cover is terrain or ground; otherwise flagged for a person to decide |
-| **Snap to ground** | Raycasts down under roads/rails/tracks and puts them their kind's lift above the surface (roads 0.1, rails 0.2). Never moves ignored parts or parts of a vehicle. | Preview, then apply (undoable) |
+| **Snap to ground** | Raycasts down under roads/rails/tracks and rests them on the surface (rails 0.2 above it, for sleepers); a negative `roadLift` sinks roads into bumpy terrain. Never moves ignored parts or parts of a vehicle. | Preview, then apply (undoable) |
 | **Drivability lint** | For roads and rails: ledges above `maxLedge` and slope changes above `maxSlopeChange` between connected pieces, the step from the ground beside a road onto its edge, any piece steeper than `maxRouteSlope`, and roads narrower than `minRoadWidth` | Report only |
 | **Headroom** | Flags tunnel roofs, bridges, road decks crossing above and overhangs lower than a kind's headroom setting (`roadHeadroom` etc.; off until set) | Report only |
 | **Vehicle profile** | `BG.checkVehicle(truck)` measures an imported truck (width, height, wheels, clearance, approach/departure/breakover angles) and checks the road limits against it, so the road numbers come from the truck | Report only |
@@ -107,7 +107,7 @@ Messages name parts by their path from the scanned model, with `#n` on the nth o
 
 - **Z-fighting:** the smaller part of the pair moves (a layered item over a plain one; never a locked or ground part). It is nudged out along the shared face normal until the faces are `zFightNudge` apart. If it fights on both opposite sides of one axis, a nudge clears both but sinks one side into the other part. That's fine when the sunk side is hidden anyway (a marking's underside on a road), so it still nudges. When both sides are visible (a window exactly as thick as its wall), it grows by the nudge on both sides instead. When the other part is being moved too (a road snapped to the ground, another nudged part), the mover clears where that part will be, so a marking on a sunk road rises with it and crossing stripes come out clean in one Apply.
 - **Z-gaps (far view):** the face in front stays in front. A face set behind the other is pushed further back to the gap; an inner ball or rod shrinks clear instead of growing past the outer one.
-- **Snap:** samples the face the part rests on every 2 studs. Each column starts just above the part's own top. If that's open air (the surface, or inside a tunnel), it casts straight down, so tunnel roads land on the tunnel floor, not the mountain above. If the part is buried, it steps up a stud at a time (up to 20) to the first open air and casts down from there. Deeper than that, it's skipped and reported. It moves the part up or down so its lowest point sits its kind's lift (`roadLift`, `railLift`, `trackLift`, else `groundLift`) above the highest ground hit. Ground means terrain or a part that starts *below* the snapped part's bottom, so markings, crates or rails sitting on it don't count.
+- **Snap:** samples the face the part rests on every 2 studs. Each column starts just above the part's own top. If that's open air (the surface, or inside a tunnel), it casts straight down, so tunnel roads land on the tunnel floor, not the mountain above. If the part is buried, it steps up a stud at a time (up to 20) to the first open air and casts down from there. Deeper than that, it's skipped and reported. It moves the part up or down so its lowest point sits its kind's lift (`roadLift`, `railLift`, `trackLift`, else `groundLift`) above the highest ground hit: 0 rests it on the ground, a negative lift sinks it in. Sinking only goes into terrain or ground parts (never into a plinth or bridge support), wedges never sink, and the part's top always stays 0.05 above the ground. Ground means terrain or a part that starts *below* the snapped part's bottom, so markings, crates or rails sitting on it don't count.
 - **Buried:** a point is buried when something occupies the space `buriedProbeHeight` (0.25) above the surface, so markings lying on the road don't trigger it, or when something within `buriedClearance` (3 studs) overhead covers it. Bridges and gantries higher than that are fine.
 - **Round parts:** two same-size cylinders on one axis (a rod in a sleeve) or two same-size balls on one centre: the smaller part's radius grows by the nudge.
 - **Moving jointed parts:** after a fix moves a part, any Weld or Motor6D holding it is updated (`C1`) to hold it in its new place. WeldConstraints are toggled off and on so they record the new offset. Revert restores them. Without this, a nudged strut welded to a conveyor frame would snap back when the game runs. (The WeldConstraint behaviour is untested in Studio.)
@@ -127,7 +127,7 @@ Project numbers (approved for the mining game):
 | `minRoadWidth` | 22 | The approved haul road, measured across the driving direction (two trucks pass: 2 × width with mirrors + 2) |
 | `gridSize` | 4 | Horizontal layout grid (`BG.snapToGrid`); matches terrain voxels |
 | `railLift` | 0.2 | Rails above their road/track bed |
-| `roadLift` | 0.1 | Roads above the ground |
+| `roadLift` | 0 | Where snapped roads sit: 0 on the ground, negative sunk into it |
 | `layerLift` | 0.05 | Lift per decal/marking layer |
 
 Engine values:
@@ -136,7 +136,7 @@ Engine values:
 |---|---|---|
 | `zFightTolerance` | 0.01 | Same-facing faces this close together z-fight |
 | `zFightNudge` | 0.02 | Gap a z-fight fix leaves (must be > tolerance) |
-| `trackLift` / `groundLift` | 0.1 | Track beds / anything else you snap |
+| `trackLift` / `groundLift` | 0 | Track beds / anything else you snap |
 | `groundTolerance` | 0.1 | Off-ground check fires beyond this |
 | `flatTiltDegrees` | 5 | Steeper parts are ramps (not snapped) |
 

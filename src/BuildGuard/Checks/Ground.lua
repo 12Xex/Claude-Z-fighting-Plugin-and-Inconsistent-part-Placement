@@ -7,9 +7,11 @@
 	starts there, so a tunnel road finds the tunnel floor and never the
 	mountain above it. If the point is inside ground (the part is sunk or
 	buried), it steps up a stud at a time, up to `snapSearchUp`, to the first
-	open air and casts down from there. It then moves the part vertically so its lowest point sits its kind's
-	lift (roadLift / railLift / trackLift, else groundLift) above the highest
-	ground hit. "Ground" is terrain, or a part that starts
+	open air and casts down from there. It then moves the part vertically so
+	its lowest point sits its kind's lift (roadLift / railLift / trackLift,
+	else groundLift) above the highest ground hit: 0 rests it on the ground,
+	a negative lift sinks it in, never so far that its top drops below
+	MIN_TOP above that ground. "Ground" is terrain, or a part that starts
 	below the snapped part's bottom (see `ignoreFor`). Ignored things
 	(BuildGuardIgnore) and vehicles are never ground.
 
@@ -144,6 +146,22 @@ end
 local LIFT_KEY = { Road = "roadLift", Rail = "railLift", Track = "trackLift" }
 Ground.LIFT_KEY = LIFT_KEY
 
+-- A sunk part's top stays at least this far above the highest ground
+-- under it, so sinking never buries it.
+Ground.MIN_TOP = 0.05
+
+-- The lift actually used for a part `thickness` studs thick: a negative
+-- lift (sinking it in) is limited so its top stays MIN_TOP above the ground.
+-- Parts only sink into real ground (terrain, or ground parts), never into
+-- a support such as a plinth or an abutment (`onGround` false), and a
+-- wedge never sinks (its slope runs down to its bottom edge).
+function Ground.effectiveLift(lift, thickness, onGround, shape)
+	if onGround == false or shape == "Wedge" or shape == "CornerWedge" then
+		return math.max(lift, 0)
+	end
+	return math.max(lift, Ground.MIN_TOP - thickness)
+end
+
 local function insideGround(point, ctx, ignore)
 	return ctx.world.isSolidTerrain(point) or ctx.world.partAt(point, ignore) ~= nil
 end
@@ -177,6 +195,12 @@ function Ground.measure(s, ctx)
 	end
 	local ignore = Ground.ignoreFor(s, ctx)
 	local lift = config[LIFT_KEY[ctx.kindOf(s.part)] or "groundLift"]
+	local thickness = s.max.Y - s.min.Y
+	local groundCache = {}
+	local function liftOver(instance)
+		local onGround = ctx.world.isTerrain(instance) or Classify.isGroundLike(instance, ctx.configFor(instance), groundCache)
+		return Ground.effectiveLift(lift, thickness, onGround, s.shape)
+	end
 	local topY = s.max.Y + 0.05
 	local best, hits, buried = -math.huge, 0, 0
 	for _, p in Geometry.faceSamples(s, restsOn, 0.05, 0.25, config.sampleSpacing) do
@@ -189,7 +213,7 @@ function Ground.measure(s, ctx)
 		end
 		if hit then
 			hits += 1
-			best = math.max(best, hit.position.Y + lift - p.Y)
+			best = math.max(best, hit.position.Y + liftOver(hit.instance) - p.Y)
 		end
 	end
 	if hits == 0 then
