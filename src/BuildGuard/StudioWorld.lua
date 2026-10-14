@@ -26,6 +26,14 @@
 	  yield()   waits a frame once about 30 ms of work have passed since the
 	            last wait (does nothing where the caller can't yield)
 	  fillTerrain(cframe, size, materialName) / clearTerrain(cframe, size)
+	  waitForTerrain(probes, timeout?) -> boolean
+	      waits (up to `timeout` seconds, 5 by default) until every probe
+	      { origin, direction } ray hits terrain: new terrain shows up in voxel
+	      reads at once but can take frames to reach raycasts. false on
+	      timeout, or at once where the caller can't yield
+	  isAreaEmpty(cframe, size) -> true | false, what
+	      no part, terrain or water in the box; `what` names the first thing
+	      found and where
 	  terrain                                         (the Terrain instance)
 ]]
 
@@ -39,6 +47,9 @@ local StudioWorld = {}
 
 local MAX_SKIPS = 64
 local EPSILON = 1e-6
+-- Terrain is read this many voxels a side at a time, well inside
+-- ReadVoxels' size limit.
+local VOXEL_CHUNK = 64
 
 --------------------------------------------------------------------------------
 -- Yielding: long scans hand Studio a frame every time slice
@@ -492,6 +503,85 @@ function StudioWorld.new(worldRoot)
 
 	function self.clearTerrain(cframe, size)
 		terrain:FillBlock(cframe, size, Enum.Material.Air)
+	end
+
+	function self.waitForTerrain(probes, timeout)
+		timeout = timeout or 5
+		local params = RaycastParams.new()
+		params.FilterType = Enum.RaycastFilterType.Include
+		params.FilterDescendantsInstances = { terrain }
+		params.IgnoreWater = true
+		local waited = 0
+		while true do
+			local seen = true
+			for _, probe in probes do
+				-- Terrain is always in workspace, whatever worldRoot is.
+				if not workspace:Raycast(probe.origin, probe.direction, params) then
+					seen = false
+					break
+				end
+			end
+			if seen then
+				return true
+			end
+			if waited >= timeout or not coroutine.isyieldable() then
+				return false
+			end
+			local ok, elapsed = pcall(task.wait)
+			if not ok then
+				return false
+			end
+			waited += elapsed
+		end
+	end
+
+	local anyPart = OverlapParams.new()
+	anyPart.FilterType = Enum.RaycastFilterType.Exclude
+	anyPart.FilterDescendantsInstances = { terrain }
+	anyPart.MaxParts = 1
+
+	-- The first voxel between grid-aligned corners `min` and `max` that isn't
+	-- Air (water counts): material, voxel centre | nil.
+	local function firstTerrain(min, max)
+		local step = 4 * VOXEL_CHUNK
+		for x = min.X, max.X - 4, step do
+			for y = min.Y, max.Y - 4, step do
+				for z = min.Z, max.Z - 4, step do
+					local low = Vector3.new(x, y, z)
+					local high = Vector3.new(math.min(x + step, max.X), math.min(y + step, max.Y), math.min(z + step, max.Z))
+					local materials = terrain:ReadVoxels(Region3.new(low, high), 4)
+					local count = materials.Size
+					for i = 1, count.X do
+						for j = 1, count.Y do
+							for k = 1, count.Z do
+								local material = materials[i][j][k]
+								if material ~= Enum.Material.Air then
+									return material, low + Vector3.new(i - 0.5, j - 0.5, k - 0.5) * 4
+								end
+							end
+						end
+					end
+				end
+			end
+		end
+		return nil
+	end
+
+	function self.isAreaEmpty(cframe, size)
+		local part = worldRoot:GetPartBoundsInBox(cframe, size, anyPart)[1]
+		if part then
+			return false, part:GetFullName()
+		end
+		-- Every voxel the box touches.
+		local box = Geometry.solidFrom(cframe, size, "Block")
+		local function toGrid(v, round)
+			return Vector3.new(round(v.X / 4) * 4, round(v.Y / 4) * 4, round(v.Z / 4) * 4)
+		end
+		local material, at = firstTerrain(toGrid(box.min, math.floor), toGrid(box.max, math.ceil))
+		if material then
+			return false, ("terrain (%s) at %s"):format(material.Name, Util.vector(at, 0))
+		end
+		return true
 	end
 
 	return self

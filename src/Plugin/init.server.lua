@@ -29,7 +29,7 @@ local FACES = { "Top", "Front", "Back", "Right", "Left", "Bottom" }
 local VIEW_DISTANCE = 25
 -- How many of the slowest checks the status line names after a scan.
 local SLOWEST_SHOWN = 3
-local FAR_VIEW_ORIGIN = Vector3.new(-4096, 0, -4096)
+local FAR_VIEW_ORIGIN = Vector3.new(-24576, 0, -24576)
 
 --------------------------------------------------------------------------------
 -- Widget
@@ -619,21 +619,43 @@ local function onBuildScene()
 	state.report = nil
 	clearMarkers()
 	clearList()
+	local SelfTest = require(script.Parent.BuildGuard.SelfTest)
 	local world = require(script.Parent.BuildGuard.StudioWorld).new()
-	BuildGuard.withUndo("BuildGuard: build test scene", function()
-		-- Built from the place-wide settings the scan will apply to it.
-		state.testScene = BuildGuard.TestScene.build(
-			workspace,
-			world,
-			(BuildGuard.getConfig(workspace)),
-			require(script.Parent.BuildGuard.SelfTest).DEFAULT_ORIGIN
+	-- Built from the place-wide settings the scan will apply to it.
+	local config = (BuildGuard.getConfig(workspace))
+	local origin = SelfTest.DEFAULT_ORIGIN
+	-- Removing the scene sets its terrain back to Air, so never build it over a map.
+	local problem = SelfTest.areaProblem(world, config, origin)
+	if problem then
+		setStatus(
+			("Test scene not built: %s. Move what's there, or run the self-test on an empty spot from the "
+				.. "command bar: require(game.ServerStorage.BuildGuard).selfTest({ origin = Vector3.new(x, 0, z) })"):format(
+				problem
+			)
 		)
+		return
+	end
+	BuildGuard.withUndo("BuildGuard: build test scene", function()
+		state.testScene = BuildGuard.TestScene.build(workspace, world, config, origin)
 	end)
 	Selection:Set({ state.testScene.folder })
 	state.scope = "Selection"
 	state.roots = { state.testScene.folder }
 	scopeButton.Text = "Scope: Selection"
-	setStatus("Test scene built at (4096, 0, 4096) and selected. Scan it, preview, apply.")
+	-- A scan before raycasts see the new terrain misses the hill and the tunnel roof.
+	setStatus("Test scene built; waiting for its terrain to show up in raycasts…")
+	local at = ("(%.0f, %.0f, %.0f)"):format(origin.X, origin.Y, origin.Z)
+	if world.waitForTerrain(state.testScene.terrainProbes, SelfTest.TERRAIN_WAIT) then
+		setStatus(("Test scene built at %s and selected (press F to look at it). Scan it, preview, apply."):format(at))
+	else
+		setStatus(
+			("Test scene built at %s and selected, but its terrain wasn't visible to raycasts after %g s, so a scan "
+				.. "now can miss the hill and the tunnel roof (P5, P13, P14). Wait a moment, then scan it."):format(
+				at,
+				SelfTest.TERRAIN_WAIT
+			)
+		)
+	end
 end
 
 local function onSelfTest()
@@ -647,6 +669,11 @@ local function onSelfTest()
 		return
 	end
 	print(result.text)
+	if result.refused then
+		-- Its spot isn't empty: the text says what's there.
+		setStatus(result.text)
+		return
+	end
 	for _, r in result.rows do
 		listRow((if r.ok then "ok    " else "FAIL  ") .. r.text, if r.ok then nil else COLORS.error)
 	end
@@ -681,12 +708,17 @@ local function onFarView()
 		then BuildGuard.FarView.DEFAULT_ORIGIN
 		else FAR_VIEW_ORIGIN
 	local old = state.farView
-	local rig = BuildGuard.withUndo("BuildGuard: build far-view rig", function()
+	local ok, rig = pcall(BuildGuard.withUndo, "BuildGuard: build far-view rig", function()
 		if old and old.Parent then
 			old:Destroy()
 		end
 		return build(workspace, origin)
 	end)
+	if not ok then
+		-- Its spot isn't empty (the message says what's there); the old rig is kept.
+		setStatus(tostring(rig))
+		return
+	end
 	state.farView = rig and rig.folder
 	if state.farView then
 		Selection:Set({ state.farView })

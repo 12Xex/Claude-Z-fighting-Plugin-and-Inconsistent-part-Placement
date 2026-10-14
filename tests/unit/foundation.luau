@@ -612,7 +612,7 @@ end)
 
 test("far-view rig: every gap pair is built, labelled and ignored by scans", function()
 	local root, world = setup()
-	local rig = BG.TestScene.buildFarView(root, Vector3.new(0, 0, 0))
+	local rig = BG.TestScene.buildFarView(root, Vector3.new(4000, 0, 4000), world)
 	for _, gap in BG.FarView.GAPS do
 		local base = rig.folder:FindFirstChild(("Flat_%g"):format(gap))
 		local overlay = rig.folder:FindFirstChild(("FlatOverlay_%g"):format(gap))
@@ -627,13 +627,48 @@ test("far-view rig: every gap pair is built, labelled and ignored by scans", fun
 end)
 
 test("far-view rig: players spawn on the View_ pads", function()
-	local root = setup()
-	local rig = BG.TestScene.buildFarView(root, Vector3.new(0, 0, 0))
+	local root, world = setup()
+	local rig = BG.TestScene.buildFarView(root, Vector3.new(4000, 0, 4000), world)
 	for _, distance in BG.FarView.DISTANCES do
 		local pad = rig.folder:FindFirstChild(("View_%d"):format(distance))
 		expect(pad and pad:IsA("SpawnLocation"), "View_" .. distance .. " is a spawn")
 		expect(pad.Neutral and pad.Enabled and pad.Anchored, "View_" .. distance .. " takes any player")
 	end
+end)
+
+test("far-view rig: refuses to build over parts or terrain", function()
+	local root, world = setup()
+	local ok, err = pcall(BG.FarView.build, root, Vector3.new(0, 0, 0), world)
+	expect(not ok and string.find(tostring(err), "Workspace.Ground", 1, true), tostring(err))
+	expect(string.find(tostring(err), "Vector3.new(", 1, true), tostring(err))
+	expect(#root:GetChildren() == 1, "nothing built")
+	-- Water under the farthest viewing pad.
+	world.fillTerrain(CFrame.new(4000, -4, 4000 - 600), Vector3.new(8, 8, 8), "Water")
+	ok, err = pcall(BG.FarView.build, root, Vector3.new(4000, 0, 4000), world)
+	expect(not ok and string.find(tostring(err), "terrain", 1, true), tostring(err))
+	expect(#root:GetChildren() == 1 and #world.blocks == 1, "nothing built, the water kept")
+	local built, rig = pcall(BG.FarView.build, root, Vector3.new(-4000, 0, -4000), world)
+	expect(built and rig.folder.Parent == root, "built on an empty spot: " .. tostring(rig))
+end)
+
+test("default spots: on the 8-stud grid, clear of each other and of a big map's sea floor", function()
+	local SelfTest = require("../harness").module("SelfTest")
+	for _, origin in { SelfTest.DEFAULT_ORIGIN, BG.FarView.DEFAULT_ORIGIN } do
+		expect(origin.X % 8 == 0 and origin.Y % 8 == 0 and origin.Z % 8 == 0, tostring(origin))
+	end
+	local root = Instance.new("Folder")
+	root.Name = "Workspace"
+	local world = T.FakeWorld.new(root, BG.Geometry)
+	-- A tested place's sea floor: x -4880..9232, z -6472..5672.
+	local sea = Instance.new("Part")
+	sea.Name = "SeaFloor"
+	sea.Size = Vector3.new(14112, 4, 12144)
+	sea.CFrame = CFrame.new(2176, -4, -400)
+	sea.Anchored = true
+	sea.Parent = root
+	BG.FarView.build(root, BG.FarView.DEFAULT_ORIGIN, world)
+	local empty, what = world.isAreaEmpty(BG.TestScene.bounds(BG.Config.merge(), SelfTest.DEFAULT_ORIGIN))
+	expect(empty, tostring(what))
 end)
 
 test("job progress counts parts inside a check, apart from which check it is", function()

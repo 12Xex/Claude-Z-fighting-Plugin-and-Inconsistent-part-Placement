@@ -6,16 +6,25 @@
 	  3. Fix: fix-all runs; "fix" problems are gone, "flag" problems are still
 	     reported, nothing else is left, and no control part moved.
 
+	It only builds where nothing is (no parts, terrain or water in the
+	scene's box), since it sets its own terrain back to Air afterwards, and
+	waits for that terrain to show up in raycasts before scanning.
+
 	Options: { world?, parent?, origin?, config?, keep? }
-	Returns { passed, text, rows }.
+	Returns { passed, text, rows }, with refused = true when the spot isn't
+	empty (nothing was built).
 ]]
 
 local TestScene = require(script.Parent.TestScene)
 local Classify = require(script.Parent.Classify)
+local Util = require(script.Parent.Util)
 
 local SelfTest = {}
 
-SelfTest.DEFAULT_ORIGIN = Vector3.new(4096, 0, 4096)
+-- Far off any usual map and clear of FarView.DEFAULT_ORIGIN, on the 8-stud grid.
+SelfTest.DEFAULT_ORIGIN = Vector3.new(-24576, 0, 24576)
+-- Seconds to wait for the scene's new terrain to show up in raycasts.
+SelfTest.TERRAIN_WAIT = 5
 
 local function reported(report, check, part)
 	for _, issue in report.issues do
@@ -50,6 +59,22 @@ local function sameAs(snap)
 	return true
 end
 
+-- What is already in the test scene's box at `origin`, and where, or nil
+-- when the box is empty.
+function SelfTest.areaProblem(world, config, origin)
+	local cframe, size = TestScene.bounds(config, origin)
+	local empty, what = world.isAreaEmpty(cframe, size)
+	if empty then
+		return nil
+	end
+	return ("%s is in the test scene's area at %s, the box from %s to %s"):format(
+		tostring(what),
+		Util.vector(origin, 0),
+		Util.vector(cframe.Position - size / 2, 0),
+		Util.vector(cframe.Position + size / 2, 0)
+	)
+end
+
 function SelfTest.run(BuildGuard, options)
 	options = options or {}
 	local world = options.world or require(script.Parent.StudioWorld).new()
@@ -58,9 +83,23 @@ function SelfTest.run(BuildGuard, options)
 	-- ones included), so it plants real violations whatever they are.
 	local config = (BuildGuard.getConfig(parent, { config = options.config }))
 	local scanOptions = { world = world, config = options.config }
+	local origin = options.origin or SelfTest.DEFAULT_ORIGIN
 
-	-- Far from the origin so it doesn't land in the middle of a real map.
-	local scene = TestScene.build(parent, world, config, options.origin or SelfTest.DEFAULT_ORIGIN)
+	-- Clearing the scene's terrain would erase any terrain or water already
+	-- there, so it never builds over a map.
+	local problem = SelfTest.areaProblem(world, config, origin)
+	if problem then
+		return {
+			passed = false,
+			refused = true,
+			rows = {},
+			text = ("BuildGuard self-test: not run, nothing was built. %s. The test builds a scene there and sets its "
+				.. "terrain back to Air afterwards, so it only runs on an empty spot: pick one and pass it, "
+				.. "e.g. BG.selfTest({ origin = Vector3.new(x, 0, z) })."):format(problem),
+		}
+	end
+
+	local scene = TestScene.build(parent, world, config, origin)
 	local root = scene.folder
 	local rows, failures = {}, 0
 	local function row(ok, text)
@@ -68,6 +107,35 @@ function SelfTest.run(BuildGuard, options)
 			failures += 1
 		end
 		table.insert(rows, { ok = ok, text = text })
+	end
+	local function finish(passes)
+		local lines = {
+			("BuildGuard self-test: %s (%d check(s), %d failure(s), %d fix pass(es))"):format(
+				if failures == 0 then "PASS" else "FAIL",
+				#rows,
+				failures,
+				passes
+			),
+		}
+		for _, r in rows do
+			table.insert(lines, (if r.ok then "  ok    " else "  FAIL  ") .. r.text)
+		end
+		if not options.keep then
+			TestScene.destroy(scene, world)
+		end
+		return { passed = failures == 0, text = table.concat(lines, "\n"), rows = rows, scene = scene }
+	end
+
+	-- Voxel reads see new terrain before raycasts do: scanning too soon
+	-- finds the road under the hill but can't lift it, and misses the
+	-- tunnel roof.
+	if world.waitForTerrain and not world.waitForTerrain(scene.terrainProbes, SelfTest.TERRAIN_WAIT) then
+		row(
+			false,
+			("terrain    new terrain wasn't visible to raycasts after %g s (or this call couldn't wait), so nothing "
+				.. "was scanned: P5, P13 and P14 need it. Run the self-test again"):format(SelfTest.TERRAIN_WAIT)
+		)
+		return finish(0)
 	end
 
 	-- 1. Scan.
@@ -163,22 +231,7 @@ function SelfTest.run(BuildGuard, options)
 	SelfTest.extraRows(BuildGuard, scene, before, result, original, config, row)
 	SelfTest.shapeRows(BuildGuard, scanOptions, row)
 
-	local lines = {
-		("BuildGuard self-test: %s (%d check(s), %d failure(s), %d fix pass(es))"):format(
-			if failures == 0 then "PASS" else "FAIL",
-			#rows,
-			failures,
-			#result.plans
-		),
-	}
-	for _, r in rows do
-		table.insert(lines, (if r.ok then "  ok    " else "  FAIL  ") .. r.text)
-	end
-
-	if not options.keep then
-		TestScene.destroy(scene, world)
-	end
-	return { passed = failures == 0, text = table.concat(lines, "\n"), rows = rows, scene = scene }
+	return finish(#result.plans)
 end
 
 local function plantedById(scene, id)

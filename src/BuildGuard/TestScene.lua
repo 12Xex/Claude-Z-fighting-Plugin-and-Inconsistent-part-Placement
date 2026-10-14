@@ -59,6 +59,7 @@
 ]]
 
 local Layers = require(script.Parent.Layers)
+local Geometry = require(script.Parent.Geometry)
 local Ground = require(script.Parent.Checks.Ground)
 local TestCases = require(script.Parent.TestCases)
 
@@ -417,7 +418,45 @@ function TestScene.build(parent, world, config, origin)
 	for _, block in tunnelBlocks do
 		table.insert(terrain, block)
 	end
-	return { folder = folder, planted = planted, controls = controls, terrain = terrain, overrideModel = pass }
+	-- Rays that must hit the new terrain before a scan can trust it (Studio's
+	-- raycasts can miss it for a few frames after voxel reads see it): down
+	-- onto the hill top (P5's fix) and up from the tunnel floor into the
+	-- roof (P13, P14).
+	local hillTop = hill.cframe.Position + Vector3.new(0, hill.size.Y / 2, 0)
+	local roof = tunnelBlocks[1].cframe.Position
+	local tunnelFloor = Vector3.new(roof.X, origin.Y + 1, roof.Z)
+	local terrainProbes = {
+		{ origin = hillTop + Vector3.new(0, 4, 0), direction = Vector3.new(0, -8, 0) },
+		{ origin = tunnelFloor, direction = Vector3.new(0, roof.Y - tunnelFloor.Y, 0) },
+	}
+	return { folder = folder, planted = planted, controls = controls, terrain = terrain, terrainProbes = terrainProbes, overrideModel = pass }
+end
+
+-- Room left around the scene when checking that its spot is empty.
+local BOUNDS_MARGIN = 8
+
+-- The box the scene fills at `origin` (its ground slab, terrain blocks and
+-- every part, plus a margin): cframe, size. Measured from a copy built
+-- outside the world, so it fits whatever sizes the config gives the scene.
+function TestScene.bounds(config, origin)
+	local offWorld = { fillTerrain = function() end, setMeshTriangles = function() end }
+	local scene = TestScene.build(nil, offWorld, config, origin)
+	local min, max = Vector3.one * math.huge, -Vector3.one * math.huge
+	local function include(s)
+		min, max = min:Min(s.min), max:Max(s.max)
+	end
+	for _, d in scene.folder:GetDescendants() do
+		if d:IsA("BasePart") then
+			include(Geometry.solid(d))
+		end
+	end
+	for _, block in scene.terrain do
+		include(Geometry.solidFrom(block.cframe, block.size, "Block"))
+	end
+	scene.folder:Destroy()
+	local margin = Vector3.one * BOUNDS_MARGIN
+	min, max = min - margin, max + margin
+	return CFrame.new((min + max) / 2), max - min
 end
 
 function TestScene.destroy(scene, world)

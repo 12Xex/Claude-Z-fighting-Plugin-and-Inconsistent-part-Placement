@@ -192,6 +192,42 @@ function FakeWorld.new(root, Geometry)
 		end
 	end
 
+	-- New terrain is visible to raycasts at once here, so this only fails
+	-- for a probe that misses every block (it would time out in Studio).
+	function self.waitForTerrain(probes)
+		for _, probe in probes do
+			local seen = false
+			for _, b in blocks do
+				seen = seen or Geometry.rayBox(b, probe.origin, probe.direction.Unit, probe.direction.Magnitude) ~= nil
+			end
+			if not seen then
+				return false
+			end
+		end
+		return true
+	end
+
+	function self.isAreaEmpty(cframe, size)
+		local part = self.partsInBox(cframe, size)[1]
+		if part then
+			return false, part:GetFullName()
+		end
+		local q = Geometry.solidFrom(cframe, size, "Block")
+		for _, b in blocks do
+			if
+				b.min.X < q.max.X
+				and q.min.X < b.max.X
+				and b.min.Y < q.max.Y
+				and q.min.Y < b.max.Y
+				and b.min.Z < q.max.Z
+				and q.min.Z < b.max.Z
+			then
+				return false, ("terrain at (%.0f, %.0f, %.0f)"):format(b.pos.X, b.pos.Y, b.pos.Z)
+			end
+		end
+		return true
+	end
+
 	return self
 end
 

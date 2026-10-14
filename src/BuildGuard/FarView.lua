@@ -17,19 +17,42 @@
 	map-sized models (BuildGuard_zFightViewDistance on the model sets it
 	from a distance). Delete the rig afterwards, so nobody spawns there.
 
-	The whole rig carries BuildGuardIgnore, so scans skip it.
+	The whole rig carries BuildGuardIgnore, so scans skip it. It is only
+	built where nothing is (no parts, terrain or water in its box); otherwise
+	build errors, saying what is in the way.
+
+	FarView.build(parent, origin?, world?)   world: StudioWorld by default
 ]]
+
+local Geometry = require(script.Parent.Geometry)
+local Util = require(script.Parent.Util)
 
 local FarView = {}
 
 FarView.GAPS = { 0.005, 0.01, 0.02, 0.03, 0.05, 0.08, 0.1, 0.15, 0.2 }
 FarView.DISTANCES = { 100, 300, 600 }
-FarView.DEFAULT_ORIGIN = Vector3.new(-4096, 0, -4096)
+-- Far off any usual map and clear of SelfTest.DEFAULT_ORIGIN, on the 8-stud grid.
+FarView.DEFAULT_ORIGIN = Vector3.new(-24576, 0, -24576)
 
 local WHITE = Color3.fromRGB(240, 240, 240)
 local RED = Color3.fromRGB(220, 40, 40)
+-- Room left around the rig when checking that its spot is empty.
+local MARGIN = 8
 
-function FarView.build(parent, origin)
+-- The box around every part in `folder`, MARGIN bigger on each side.
+local function box(folder)
+	local min, max = Vector3.one * math.huge, -Vector3.one * math.huge
+	for _, d in folder:GetDescendants() do
+		if d:IsA("BasePart") then
+			local s = Geometry.solid(d)
+			min, max = min:Min(s.min), max:Max(s.max)
+		end
+	end
+	min, max = min - Vector3.one * MARGIN, max + Vector3.one * MARGIN
+	return CFrame.new((min + max) / 2), max - min
+end
+
+function FarView.build(parent, origin, world)
 	origin = origin or FarView.DEFAULT_ORIGIN
 	local base = CFrame.new(origin)
 	local folder = Instance.new("Folder")
@@ -88,6 +111,23 @@ function FarView.build(parent, origin)
 		spot.Enabled = true
 	end
 
+	-- Checked before the rig goes in, so it never lands on a map.
+	world = world or require(script.Parent.StudioWorld).new()
+	local cframe, size = box(folder)
+	local empty, what = world.isAreaEmpty(cframe, size)
+	if not empty then
+		folder:Destroy()
+		error(
+			("BuildGuard: far-view rig not built: %s is in its area at %s, the box from %s to %s. Build it on an "
+				.. "empty spot: BG.FarView.build(workspace, Vector3.new(x, 0, z))"):format(
+				tostring(what),
+				Util.vector(origin, 0),
+				Util.vector(cframe.Position - size / 2, 0),
+				Util.vector(cframe.Position + size / 2, 0)
+			),
+			0
+		)
+	end
 	folder.Parent = parent
 	return { folder = folder }
 end

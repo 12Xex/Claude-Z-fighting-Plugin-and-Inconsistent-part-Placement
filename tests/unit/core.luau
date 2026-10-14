@@ -687,3 +687,103 @@ for _, case in {
 		expect(outside == 0, "terrain filled outside the recording")
 	end)
 end
+
+-- An empty world for a self-test.
+local function emptyWorld()
+	local root = Instance.new("Folder")
+	root.Name = "Workspace"
+	return root, FakeWorld.new(root, BG.Geometry)
+end
+
+test("the test scene's bounds hold every part and terrain block it builds, with a margin", function()
+	for _, overrides in { {}, { minRoadWidth = D.minRoadWidth + 10, maxSlopeChange = 8 } } do
+		local root, world = emptyWorld()
+		local config = BG.Config.merge(overrides)
+		local origin = Vector3.new(4000, 0, 4000)
+		local cframe, size = BG.TestScene.bounds(config, origin)
+		expect(#root:GetChildren() == 0, "measuring built nothing in the world")
+		local lo = cframe.Position - size / 2 + Vector3.new(4, 4, 4)
+		local hi = cframe.Position + size / 2 - Vector3.new(4, 4, 4)
+		local function inside(s, name)
+			for _, axis in { "X", "Y", "Z" } do
+				expect(s.min[axis] >= lo[axis] and s.max[axis] <= hi[axis], name .. " sticks out on " .. axis)
+			end
+		end
+		local scene = BG.TestScene.build(root, world, config, origin)
+		for _, d in scene.folder:GetDescendants() do
+			if d:IsA("BasePart") then
+				inside(BG.Geometry.solid(d), d:GetFullName())
+			end
+		end
+		expect(#world.blocks == 4, "four terrain blocks")
+		for _, block in world.blocks do
+			inside(block, "a terrain block")
+		end
+	end
+end)
+
+test("the test scene's terrain probes start in the open and end in its hill and tunnel roof", function()
+	local root, world = emptyWorld()
+	local scene = BG.TestScene.build(root, world, BG.Config.merge(), Vector3.new(4000, 0, 4000))
+	local probes = scene.terrainProbes
+	expect(probes and #probes == 2, "one probe for the hill, one for the tunnel roof")
+	for i, probe in probes do
+		expect(not world.isInsideTerrain(probe.origin), "probe " .. i .. " starts inside terrain")
+		local block = scene.terrain[i]
+		local s = BG.Geometry.solidFrom(block.cframe, block.size, "Block")
+		expect(BG.Geometry.containsPoint(s, probe.origin + probe.direction), "probe " .. i .. " ends outside its block")
+	end
+	expect(probes[1].direction.Y < 0 and probes[2].direction.Y > 0, "down onto the hill, up into the roof")
+	expect(world.waitForTerrain(probes) == true, "the fake world's terrain is visible at once")
+	local miss = { { origin = Vector3.new(0, 50, 0), direction = Vector3.new(0, 10, 0) } }
+	expect(world.waitForTerrain(miss) == false, "a probe that misses terrain never sees it")
+end)
+
+test("self-test refuses a spot that isn't empty, before building anything", function()
+	local origin = Vector3.new(4000, 0, 4000)
+	local cframe, size = BG.TestScene.bounds(BG.Config.merge(), origin)
+	-- In the margin near a corner of the scene's box, clear of the scene itself.
+	local corner = cframe.Position - size / 2 + Vector3.new(3, 3, 3)
+	for _, case in { "part", "terrain" } do
+		local root, world = emptyWorld()
+		if case == "part" then
+			local rock = Instance.new("Part")
+			rock.Name = "SeaFloor"
+			rock.Size = Vector3.new(2, 2, 2)
+			rock.CFrame = CFrame.new(corner)
+			rock.Anchored = true
+			rock.Parent = root
+		else
+			world.fillTerrain(CFrame.new(corner), Vector3.new(4, 4, 4), "Water")
+		end
+		local filled, fill = 0, world.fillTerrain
+		world.fillTerrain = function(...)
+			filled += 1
+			return fill(...)
+		end
+		local result = BG.selfTest({ world = world, parent = root, origin = origin })
+		expect(not result.passed and result.refused, case .. ": " .. result.text)
+		expect(#root:GetChildren() == (if case == "part" then 1 else 0), case .. ": something was built")
+		expect(filled == 0, case .. ": terrain was filled")
+		expect(#world.blocks == (if case == "terrain" then 1 else 0), case .. ": the terrain there was cleared")
+		local what = if case == "part" then "Workspace.SeaFloor" else "terrain"
+		expect(string.find(result.text, what, 1, true), result.text)
+		expect(string.find(result.text, "origin = Vector3.new(", 1, true), result.text)
+	end
+end)
+
+test("self-test stops with a terrain row when new terrain never shows up in raycasts", function()
+	local root, world = emptyWorld()
+	local asked = nil
+	world.waitForTerrain = function(probes, timeout)
+		asked = { probes = probes, timeout = timeout }
+		return false
+	end
+	local result = BG.selfTest({ world = world, parent = root, origin = Vector3.new(4000, 0, 4000) })
+	expect(not result.passed, result.text)
+	expect(asked and #asked.probes == 2 and asked.timeout == 5, "waited on the scene's probes for 5 s")
+	expect(#result.rows == 1 and not result.rows[1].ok, result.text)
+	local wanted = "terrain    new terrain wasn't visible to raycasts after 5 s"
+	expect(string.find(result.rows[1].text, wanted, 1, true), result.text)
+	expect(#root:GetChildren() == 0 and #world.blocks == 0, "scene cleaned up")
+end)
