@@ -32,9 +32,12 @@
 	(Transparency at or above zFightIgnoreTransparency, as for the z-fight
 	scan) and stops at a water surface above the ground. A footing under
 	the part is ground like anything else starting below it, so it closes
-	the gap if it's visible. An edge with a drop deeper than connectMaxStep
-	anywhere along it (or no ground at all) is a span (a bridge, an
-	overpass), so none of that edge counts.
+	the gap if it's visible. Where an edge passes over a drop deeper than
+	connectMaxStep (or no ground at all), that stretch is a span (a bridge,
+	an overpass, an end out over a cliff) and doesn't count, nor do the
+	samples either side of it out to where the edge is back on the ground
+	(its gap within the limit), so neither do the banks sloping down into a
+	ravine. The rest of the edge still counts.
 
 	Tilted parts (ramps, slopes) are skipped: a ramp is meant to leave the
 	ground. A block lying upside down rests on its Top face (a box looks the
@@ -160,7 +163,7 @@ local function riders(s, ctx)
 	return out
 end
 
-local LIFT_KEY = { Road = "roadLift", Rail = "railLift", Track = "trackLift" }
+local LIFT_KEY = Classify.LIFT_KEY
 Ground.LIFT_KEY = LIFT_KEY
 
 -- A sunk part's top stays at least this far above the highest ground
@@ -258,7 +261,8 @@ function Ground.measure(s, ctx)
 end
 
 -- The edge of `s`'s resting face that the face point `p` lies within
--- `band` studs of, named by the part's own axes, or nil.
+-- `band` studs of, named by the part's own axes, then where `p` lies along
+-- that edge and across it (local coordinates); or nil.
 local function edgeOf(s, p, band)
 	local lp = s.cf:PointToObjectSpace(p)
 	local h = s.half
@@ -266,7 +270,17 @@ local function edgeOf(s, p, band)
 	if math.min(dx, dz) > band then
 		return nil
 	end
-	return if dx <= dz then (if lp.X > 0 then "+X" else "-X") else (if lp.Z > 0 then "+Z" else "-Z")
+	if dx <= dz then
+		return (if lp.X > 0 then "+X" else "-X"), lp.Z, lp.X
+	end
+	return (if lp.Z > 0 then "+Z" else "-Z"), lp.X, lp.Z
+end
+
+-- The biggest gap allowed under a part of `kind` (nil for none): maxHover,
+-- plus its kind's lift if positive (a rail's room for sleepers isn't a gap).
+local function gapLimit(config, kind)
+	local key = LIFT_KEY[kind]
+	return config.maxHover + (if key then math.max(config[key], 0) else 0)
 end
 
 -- A part light passes through: at or above zFightIgnoreTransparency, the
@@ -300,23 +314,49 @@ local function shownUnder(m, i, ctx, ignore, config)
 	return { y = hit and hit.position.Y, water = false }
 end
 
+-- Samples this close (studs) across an edge lie in the same row along it.
+local SAME_ROW = 0.05
+
+-- Marks in `dropped` the spans in `row` (sample indexes in order along an
+-- edge, their gaps in `found`): each sample deeper than `step` (or with
+-- nothing below it), and its neighbours either side out to the first one
+-- back on the ground (its gap within `limit`).
+local function dropSpans(row, found, limit, step, dropped)
+	for k, i in row do
+		if found[i].gap > step then
+			dropped[i] = true
+			for _, dir in { -1, 1 } do
+				local n = k + dir
+				while row[n] and found[row[n]].gap > limit and found[row[n]].gap <= step do
+					dropped[row[n]] = true
+					n += dir
+				end
+			end
+		end
+	end
+end
+
 -- The biggest gap between `s`'s resting face and the ground under it where
 -- it shows: at the samples within max(2, sampleSpacing) studs of the face's
 -- edges, from a measure `m`. Returns { gap, position, edge, water, through }
 -- (edges named by the part's own axes), or nil when no such sample found
--- ground. A sunk part's gaps are negative. An edge with a drop deeper than
--- connectMaxStep anywhere along it is a span (a bridge, an overpass), so
--- none of its samples count. Given `ctx` (as the gap check does), it
--- measures to what shows (see shownUnder): `water` is set when that's a
--- water surface, `through` to an invisible part looked through, and a
--- sample with nothing below it makes its edge a span. Without, it
--- measures to the snap's ground.
+-- ground. A sunk part's gaps are negative. Where an edge passes over a drop
+-- deeper than connectMaxStep it's a span (a bridge, an overpass, an end
+-- out over a cliff): those samples don't count, nor do their neighbours
+-- along the edge out to the first one whose gap is within the part's limit
+-- (maxHover plus its kind's lift), where the edge is back on the ground.
+-- Given `ctx` (as the gap check does), it measures to what shows (see
+-- shownUnder): `water` is set when that's a water surface, `through` to an
+-- invisible part looked through, and a sample with nothing below it is a
+-- span. Without, it measures to the snap's ground.
 function Ground.edgeGap(s, m, config, ctx)
 	local band = math.max(2, config.sampleSpacing) + 1e-3
 	local ignore = ctx and Ground.ignoreFor(s, ctx)
-	local worst, spans = {}, {}
-	for i, p in m.samples or {} do
-		local edge = edgeOf(s, p, band)
+	local limit = gapLimit(config, ctx and ctx.kindOf(s.part)) + 1e-3
+	local samples = m.samples or {}
+	local found, edges = {}, {}
+	for i, p in samples do
+		local edge, along, across = edgeOf(s, p, band)
 		local seen = nil
 		if edge and ctx then
 			seen = shownUnder(m, i, ctx, ignore, config)
@@ -325,24 +365,45 @@ function Ground.edgeGap(s, m, config, ctx)
 		end
 		if seen then
 			local gap = if seen.y then p.Y - seen.y else math.huge
-			local w = worst[edge]
-			if gap > config.connectMaxStep then
-				spans[edge] = true
-			elseif not w or gap > w.gap then
-				worst[edge] = { gap = gap, position = p, edge = edge, water = seen.water, through = seen.through, index = i }
+			found[i] = { gap = gap, edge = edge, along = along, across = across, water = seen.water, through = seen.through }
+			edges[edge] = edges[edge] or {}
+			table.insert(edges[edge], i)
+		end
+	end
+	-- Each edge's samples in rows (one per distance in from the edge), each
+	-- row in order along it.
+	local dropped = {}
+	for _, list in edges do
+		table.sort(list, function(a, b)
+			return found[a].across < found[b].across
+		end)
+		local rows = {}
+		for _, i in list do
+			local row = rows[#rows]
+			if not row or found[i].across - found[row[1]].across > SAME_ROW then
+				row = {}
+				table.insert(rows, row)
 			end
+			table.insert(row, i)
+		end
+		for _, row in rows do
+			table.sort(row, function(a, b)
+				return found[a].along < found[b].along
+			end)
+			dropSpans(row, found, limit, config.connectMaxStep, dropped)
 		end
 	end
-	local out = nil
-	for edge, w in worst do
-		if not spans[edge] and (not out or w.gap > out.gap or (w.gap == out.gap and w.index < out.index)) then
-			out = w
+	local best = nil
+	for i in samples do
+		if found[i] and not dropped[i] and (not best or found[i].gap > found[best].gap) then
+			best = i
 		end
 	end
-	if out then
-		out.index = nil
+	if not best then
+		return nil
 	end
-	return out
+	local f = found[best]
+	return { gap = f.gap, position = samples[best], edge = f.edge, water = f.water, through = f.through }
 end
 
 -- Locked parts (Locked, BuildGuardLocked) are never moved by a snap.
@@ -417,7 +478,7 @@ local function gapIssue(s, kind, ctx, m)
 	local worst = Ground.edgeGap(s, m, config, ctx)
 	local key = LIFT_KEY[kind]
 	local lift = math.max(config[key], 0)
-	if not worst or worst.gap <= config.maxHover + lift + 1e-3 then
+	if not worst or worst.gap <= gapLimit(config, kind) + 1e-3 then
 		return nil
 	end
 	local canSink = Config.schema[key].min < 0

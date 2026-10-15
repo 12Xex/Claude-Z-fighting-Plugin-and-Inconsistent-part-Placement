@@ -40,9 +40,12 @@
 	Road-like slabs: flat parts with no kind, made of a road material
 	(Config.roadLikeMaterials), their top within 10° of level and at least
 	1.5 by 6 studs across, are listed in the report, so roads, yards and
-	shoulders nobody named don't go unchecked silently. Not listed: slabs
-	the roads resting on them cover (footings, plinths). BuildGuardKind =
-	"None" on a part or any ancestor leaves it off that list.
+	shoulders nobody named don't go unchecked silently. Under 4 studs
+	across, only strips to drive along (at least 12 long and 6 times longer
+	than wide: shoulders, lanes) and slabs named like a road are, so steps,
+	lintels, shelves and planks aren't. Not listed: slabs the roads resting
+	on them cover (footings, plinths). BuildGuardKind = "None" on a part or
+	any ancestor leaves it off that list.
 ]]
 
 local Util = require(script.Parent.Util)
@@ -52,6 +55,9 @@ local SpatialHash = require(script.Parent.SpatialHash)
 local Classify = {}
 
 local KINDS = { Road = true, Rail = true, Track = true }
+-- The setting that says how far above the ground (or a support) each kind
+-- rests.
+Classify.LIFT_KEY = { Road = "roadLift", Rail = "railLift", Track = "trackLift" }
 
 -- A part named as a road must be at least this wide (studs, its shorter
 -- side) to count as one.
@@ -75,6 +81,21 @@ function Classify.isFlat(part, config)
 	-- A panel standing on edge (a sign, a barrier). Rails are taller than
 	-- they're wide, but under a stud.
 	return not (size.Y > math.min(size.X, size.Z) and size.Y > 1)
+end
+
+-- The kind `part`'s name says: its first word is in a rule of
+-- config.kindNameWords. Nil if none.
+local function namedKind(part, config)
+	local first = Util.words(part.Name)[1]
+	if not first then
+		return nil
+	end
+	for _, rule in config.kindNameWords do
+		if table.find(rule.words, first) then
+			return rule.kind
+		end
+	end
+	return nil
 end
 
 -- Does `part`'s shape and placement fit a `kind` named by its name?
@@ -111,19 +132,11 @@ function Classify.kind(part, config, world, inVehicle)
 	if config.classifyByName == false then
 		return nil
 	end
-	local first = Util.words(part.Name)[1]
-	if not first then
+	local kind = namedKind(part, config)
+	if not kind or not looksLike(part, kind, config) or (inVehicle and inVehicle(part)) then
 		return nil
 	end
-	for _, rule in config.kindNameWords do
-		if table.find(rule.words, first) then
-			if not looksLike(part, rule.kind, config) or (inVehicle and inVehicle(part)) then
-				return nil
-			end
-			return rule.kind
-		end
-	end
-	return nil
+	return kind
 end
 
 -- Items placed with Layers (markings, signs, trim) carry this attribute.
@@ -259,13 +272,19 @@ end
 -- and stepping slabs don't.
 Classify.NOTE_MIN_WIDTH = 1.5
 Classify.NOTE_MIN_LENGTH = 6
+-- Under ROAD_MIN_WIDTH across, a slab counts only when it's a strip to
+-- drive along, at least this long and this many times longer than wide
+-- (a 3x40 shoulder, not a step or a shelf), or is named like a road.
+Classify.NOTE_STRIP_LENGTH = 12
+Classify.NOTE_STRIP_RATIO = 6
 -- ...and its top within this many degrees of level, so pitched roofs don't.
 Classify.NOTE_MAX_TILT = 10
 local NOTE_MIN_UP = math.cos(math.rad(Classify.NOTE_MAX_TILT)) - 1e-4
 -- A slab holds a road up (a footing, a plinth) when the roads resting on
--- it cover its top: it lies within one road's footprint plus this margin
--- (studs), or its top's area is at most FOOTING_COVER times the area they
--- cover.
+-- it (their bottom within 0.5 studs of its top, plus their kind's lift if
+-- positive) cover its top: it lies within one road's footprint plus this
+-- margin (studs), or its top's area is at most FOOTING_COVER times the
+-- area they cover.
 Classify.FOOTING_MARGIN = 1
 Classify.FOOTING_COVER = 1.2
 
@@ -281,7 +300,10 @@ end
 
 -- Is solid `s` shaped like a slab to drive on? Flat by the name rules,
 -- not a corner wedge or a layered item, its top within NOTE_MAX_TILT of
--- level, and at least NOTE_MIN_WIDTH by NOTE_MIN_LENGTH across.
+-- level, and at least NOTE_MIN_WIDTH by NOTE_MIN_LENGTH across. Under
+-- ROAD_MIN_WIDTH across, only a strip (NOTE_STRIP_LENGTH long and
+-- NOTE_STRIP_RATIO times longer than wide) or a slab named like a road
+-- (its first word one of kindNameWords).
 local function slabLike(s, config)
 	local part = s.part
 	if s.shape == "CornerWedge" or Classify.isLayered(part) or not Classify.isFlat(part, config) then
@@ -291,8 +313,13 @@ local function slabLike(s, config)
 	if up.Y < NOTE_MIN_UP then
 		return false
 	end
-	local size = s.size
-	return math.min(size.X, size.Z) >= Classify.NOTE_MIN_WIDTH and math.max(size.X, size.Z) >= Classify.NOTE_MIN_LENGTH
+	local width, length = math.min(s.size.X, s.size.Z), math.max(s.size.X, s.size.Z)
+	if width < Classify.NOTE_MIN_WIDTH or length < Classify.NOTE_MIN_LENGTH then
+		return false
+	end
+	return width >= Classify.ROAD_MIN_WIDTH
+		or (length >= Classify.NOTE_STRIP_LENGTH and length >= Classify.NOTE_STRIP_RATIO * width)
+		or namedKind(part, config) ~= nil
 end
 
 -- The two axes of `s` nearest level (indexes into s.axes) and their half sizes.
@@ -320,11 +347,12 @@ local function footprint(s)
 	return out, a, b
 end
 
--- Do roads/rails/tracks (among `kinded`, found through `hash`) resting on
--- `s`'s top cover it, so `s` holds them up (a footing, a plinth)? A sunk
--- road reaches below that top; one resting on it starts at it. A yard or
+-- Do roads/rails/tracks (among `kinded`, found through `hash`, each
+-- resting its `lifts[i]` above a support) resting on `s`'s top cover it, so
+-- `s` holds them up (a footing, a plinth)? A sunk road reaches below that
+-- top; one resting on it starts at it, or its lift above it. A yard or
 -- turnaround a road runs onto isn't covered.
-local function holdsUpKind(s, hash, kinded)
+local function holdsUpKind(s, hash, kinded, lifts)
 	local outline = footprint(s)
 	local area = Geometry.polygonArea(outline)
 	local point, normal = topPlane(s)
@@ -343,7 +371,7 @@ local function holdsUpKind(s, hash, kinded)
 				z += p[2] / #overlap
 			end
 			local topY = point.Y - (normal.X * (x - point.X) + normal.Z * (z - point.Z)) / normal.Y
-			if k.min.Y <= topY + 0.5 and k.max.Y >= topY then
+			if k.min.Y <= topY + 0.5 + lifts[i] and k.max.Y >= topY then
 				-- Within the road's footprint plus the margin, corner by corner.
 				local half = { k.half.X, k.half.Y, k.half.Z }
 				local within = true
@@ -368,7 +396,8 @@ end
 -- Flat slabs that look like road surfaces but that no check treats as a
 -- road, rail or track, in scan order: flat by the name rules, not a corner
 -- wedge, top within NOTE_MAX_TILT of level, at least NOTE_MIN_WIDTH by
--- NOTE_MIN_LENGTH across, and made of a material in
+-- NOTE_MIN_LENGTH across (a strip or named like a road when under
+-- ROAD_MIN_WIDTH: see slabLike), and made of a material in
 -- config.roadLikeMaterials. Left out: ground, layered and ignored parts,
 -- vehicle parts, anything at or under an instance with BuildGuardKind =
 -- "None", and slabs the roads/rails/tracks resting on them cover (a
@@ -380,7 +409,7 @@ function Classify.unclassified(ctx)
 		materials[name] = true
 	end
 	local groundCache, noneCache = {}, {}
-	local hash, kinded = nil, nil
+	local hash, kinded, lifts = nil, nil, nil
 	local out = {}
 	for i, s in ctx.solids do
 		local part = s.part
@@ -396,15 +425,19 @@ function Classify.unclassified(ctx)
 			and not ctx.vehicleOf(part)
 		then
 			if not hash then
-				hash, kinded = SpatialHash.new(16), {}
+				hash, kinded, lifts = SpatialHash.new(16), {}, {}
 				for _, other in ctx.solids do
-					if ctx.kindOf(other.part) then
+					local kind = ctx.kindOf(other.part)
+					if kind then
+						-- Its box reaches down by its lift, to the support it rests on.
+						local lift = math.max(ctx.configFor(other.part)[Classify.LIFT_KEY[kind]], 0)
 						table.insert(kinded, other)
-						hash:insert(#kinded, other.min, other.max)
+						table.insert(lifts, lift)
+						hash:insert(#kinded, other.min - Vector3.new(0, lift, 0), other.max)
 					end
 				end
 			end
-			if not holdsUpKind(s, hash, kinded) then
+			if not holdsUpKind(s, hash, kinded, lifts) then
 				table.insert(out, part)
 			end
 		end

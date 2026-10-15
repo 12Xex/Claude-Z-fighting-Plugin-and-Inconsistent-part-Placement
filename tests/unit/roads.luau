@@ -961,6 +961,43 @@ test("gap: an edge spanning a drop deeper than connectMaxStep is a bridge, slope
 	near(gaps[1].value, 1.5, 1e-3, "over the fill")
 end)
 
+test("gap: an end overhanging a cliff drops only that stretch of the edge; a dip elsewhere along it is still a gap", function()
+	-- A plateau 10 high for x <= 10 with a trench 1.5 deep under the road's
+	-- -Z side from x = -20 to -4. Past the cliff there's the ground slab far
+	-- below, or nothing at all.
+	for _, below in { "deep", "void" } do
+		local root, world, part = setup()
+		if below == "void" then
+			root:FindFirstChild("Ground"):Destroy()
+		end
+		local function block(x0, x1, z0, z1, y0, y1)
+			part("Ground_Plateau", Vector3.new(x1 - x0, y1 - y0, z1 - z0), CFrame.new((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2))
+		end
+		local t0, t1 = -W / 2 - 1, -W / 2 + 2
+		block(-60, 10, -30, 30, 2, 8.5)
+		block(-60, 10, t1, 30, 8.5, 10)
+		block(-60, 10, -30, t0, 8.5, 10)
+		block(-60, -20, t0, t1, 8.5, 10)
+		block(-4, 10, t0, t1, 8.5, 10)
+		for _, case in { { length = 40, label = "ending at the cliff" }, { length = 44, label = "overhanging it 4" }, { length = 52, label = "overhanging it 12" } } do
+			local label = ("%s, %s: "):format(below, case.label)
+			local road = part("Road_Approach", Vector3.new(case.length, 0.8, W), CFrame.new(-30 + case.length / 2, 10 + D.roadLift + 0.4, 0))
+			local report = BG.scan(root, { world = world })
+			local gaps = gapsOf(report, road)
+			expect(#gaps == 1 and gaps[1].edge == "-Z", label .. BG.format(report))
+			near(gaps[1].value, 1.5, 1e-3, label .. "down into the trench")
+			expect(gaps[1].position.X > -20 and gaps[1].position.X < -4, label .. Util.vector(gaps[1].position))
+			expect(#checks(report, "offground") == 0, label .. BG.format(report))
+			road:Destroy()
+		end
+		-- With the trench filled, the overhang alone isn't a gap.
+		block(-20, -4, t0, t1, 8.5, 10)
+		local road = part("Road_Approach", Vector3.new(44, 0.8, W), CFrame.new(-8, 10 + D.roadLift + 0.4, 0))
+		local report = BG.scan(root, { world = world })
+		expect(#gapsOf(report, road) == 0, below .. ", no trench: " .. BG.format(report))
+	end
+end)
+
 test("gap: over water it's measured to the water surface; the snap still looks through water", function()
 	-- A beach road with its +Z edge 3 studs out over the sea: deep water
 	-- (the seabed more than connectMaxStep down), then shallow water.
@@ -1206,6 +1243,15 @@ test("unclassified: a yard a road runs onto is listed; a footing the road covers
 	for _, p in { yard, farmyard, bed } do
 		expect(table.find(report.unclassified, p), p.Name .. " not listed: " .. listedPaths(report))
 	end
+	-- A road on a support keeps a positive roadLift above it: still a footing.
+	local root2, world2, part2 = setup()
+	root2:SetAttribute("BuildGuard_roadLift", 1.5)
+	slab(part2, "Footing", Vector3.new(30, 2, W), "Concrete", CFrame.new(0, 1, 0))
+	part2("Road_1", Vector3.new(30, 0.8, W), CFrame.new(0, 2 + 1.5 + 0.4, 0))
+	local plinth = slab(part2, "Plinth", Vector3.new(30, 2, W), "Concrete", CFrame.new(0, 1, 100))
+	part2("Road_2", Vector3.new(30, 0.8, W), CFrame.new(0, 2 + 2.5 + 0.4, 100))
+	report = BG.scan(root2, { world = world2 })
+	expect(#report.unclassified == 1 and report.unclassified[1] == plinth, "only the one with a road 2.5 above it: " .. listedPaths(report))
 end)
 
 test("unclassified: shoulders and lanes from 1.5 studs across are listed, named like a road or not", function()
@@ -1224,6 +1270,40 @@ test("unclassified: shoulders and lanes from 1.5 studs across are listed, named 
 		expect(table.find(report.unclassified, p), p.Name .. " not listed: " .. listedPaths(report))
 	end
 	expect(has(BG.format(report), "[NOTE] 3 flat slab(s) look like road surfaces (Pebble, Mud)"), BG.format(report))
+end)
+
+test("unclassified: under 4 studs across only strips to drive along or slabs named like a road are listed, so building trim isn't", function()
+	local root, world, part = setup()
+	local house = Instance.new("Model")
+	house.Name = "House"
+	house.Parent = root
+	-- Trim the team found listed: steps, a lintel, a cap on a short garden
+	-- wall, a plank and a shelf.
+	for i = 1, 3 do
+		slab(part, "Step", Vector3.new(6, 0.5, 2), "Concrete", CFrame.new(0, 0.25 + (i - 1) * 0.5, 10 - i * 2), house)
+	end
+	slab(part, "Lintel", Vector3.new(8, 1, 1.5), "Concrete", CFrame.new(0, 8, 0), house)
+	part("Wall", Vector3.new(10, 3, 1.5), CFrame.new(20, 1.5, 0), house)
+	slab(part, "WallCap", Vector3.new(10, 0.5, 2), "Concrete", CFrame.new(20, 3.25, 0), house)
+	slab(part, "Plank", Vector3.new(8, 0.3, 1.6), "Slate", CFrame.new(40, 3, 0), house)
+	slab(part, "Shelf", Vector3.new(6, 0.2, 1.5), "Concrete", CFrame.new(50, 4, 0), house)
+	-- Short of a strip: 11 long, or 16 long but only 5.3 times its width.
+	slab(part, "Verge", Vector3.new(11, 0.5, 1.5), "Pebble", CFrame.new(0, 0.25, 40))
+	slab(part, "Verge", Vector3.new(16, 0.5, 3), "Pebble", CFrame.new(0, 0.25, 50))
+	-- Strips: just at 12 long and 6 times its width, a 3x40 lane turned 30°.
+	local verge = slab(part, "Verge", Vector3.new(12, 0.5, 2), "Pebble", CFrame.new(0, 0.25, 60))
+	local lane = slab(part, "Lane", Vector3.new(3, 0.5, 40), "Mud", CFrame.new(40, 0.25, 60) * CFrame.Angles(0, math.rad(30), 0))
+	-- Named like a road, any shape: too narrow to be a road, so listed.
+	local named = slab(part, "Road_Verge", Vector3.new(8, 0.5, 2), "Pebble", CFrame.new(0, 0.25, 80))
+	local street = slab(part, "StreetIsland", Vector3.new(6, 0.5, 3), "Concrete", CFrame.new(20, 0.25, 80))
+	-- 4 across and wider: any slab 6 long.
+	local landing = slab(part, "Landing", Vector3.new(6, 0.5, 4), "Concrete", CFrame.new(0, 0.25, 100))
+	local report = BG.scan(root, { world = world })
+	local wanted = { verge, lane, named, street, landing }
+	expect(#report.unclassified == #wanted, listedPaths(report))
+	for _, p in wanted do
+		expect(table.find(report.unclassified, p), report.path(p) .. " not listed: " .. listedPaths(report))
+	end
 end)
 
 test("unclassified: only slabs within 10° of level are listed, so pitched roofs aren't", function()

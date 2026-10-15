@@ -645,6 +645,8 @@ for _, case in {
 	{ config = { maxSlopeChange = 30 }, place = { maxLedge = 0.8, minRoadWidth = D.minRoadWidth + 2 } },
 	-- Roads and track beds sunk into the ground place-wide.
 	{ config = {}, place = { roadLift = -0.3, trackLift = -0.2 } },
+	-- ...and lifted: a road on a support (P32's footing) keeps its lift.
+	{ config = {}, place = { roadLift = 0.5 } },
 	-- Seams off: P34 is skipped (so is a seam width too narrow for it; see
 	-- the P34 test below).
 	{ config = { zFightSeamWidth = 0 }, atDefault = true },

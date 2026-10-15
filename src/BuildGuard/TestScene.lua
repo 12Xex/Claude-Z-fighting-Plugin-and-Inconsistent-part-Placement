@@ -37,16 +37,20 @@
 	                                          the end of another
 	  P31 Road_YardThick     edge       flag  thick road on a pad that's ground through its
 	                                          folder's BuildGuardGround tag
-	  P32 Road_OverDip       gap        flag  road resting on two raised ground pads, its
-	                                          edges hanging over the dip between them (left
-	                                          out, with its footing control, when maxHover
-	                                          leaves no room for a gap under connectMaxStep)
+	  P32 Road_OverDip       gap        flag  road resting on two raised ground pads on a
+	                                          mesa, its edges hanging over the dip between
+	                                          them and its end out over the drop off the
+	                                          mesa (left out, with its footing control,
+	                                          when maxHover leaves no room for a gap under
+	                                          connectMaxStep)
 
 	Road controls with them: the same overpass built high, a gentle wedge
 	ramp (its foot is at ground level) up to a road on a plinth, a road
 	built upside down, a thin road on the yard pad, the P32 road with a
-	footing filling the dip under it (and the footing). The gentle ramp off
-	Road_E sits on an embankment: under flatTiltDegrees it counts as flat.
+	footing filling the dip under it up to its lift on a support (and the
+	footing), and a concrete step too short to be a road-like slab. The
+	gentle ramp off Road_E sits on an embankment: under flatTiltDegrees it
+	counts as flat.
 
 	P17 to P26, P33 to P33c and P34 (meshes, round parts, corner wedges, far
 	view, repeated names, names that aren't roads, road-like slabs with no
@@ -412,33 +416,56 @@ function TestScene.build(parent, world, config, origin)
 
 	-- P32: a road resting on two raised ground pads with a dip between them,
 	-- its edges hanging over the dip (a straight slab over rolling land).
+	-- It all stands on a mesa, and the road's +X end runs out past its pad
+	-- over the drop off the mesa: deeper than connectMaxStep, so that
+	-- stretch is a span, but the dip along the same edges still counts.
 	-- Guardrails along the dip keep the edge check off it. The same road
-	-- with a footing filling the dip up to its bottom is a control, and so is
-	-- the footing (it holds up a road, so it isn't a road-like slab). The
-	-- gap has to stay under connectMaxStep (a deeper drop is a span), so all
-	-- of this is left out when maxHover (plus a positive roadLift) leaves no
-	-- room for one over the limit.
+	-- with a footing filling the dip (on the ground, no overhang) is a
+	-- control, and so is the footing (it holds up a road, so it isn't a
+	-- road-like slab). The footing's top is the road's lift on a support
+	-- (onSupport) below the road. The gap has to stay under connectMaxStep
+	-- (a deeper drop is a span), so all of this is left out when maxHover
+	-- (plus a positive roadLift) leaves no room for one over the limit.
 	local gapLimit = config.maxHover + math.max(config.roadLift, 0)
 	local hang = math.min(gapLimit + 1, config.connectMaxStep - 0.1)
 	if hang > gapLimit + 0.05 then
 		local groundPadTop = hang - lift
 		local span = L + 4
 		local dip = span - 12
-		local function overDip(name, x)
+		local GRASS = Color3.fromRGB(90, 140, 70)
+		-- `mesa` stands it on a mesa that high; `overhang` runs the road's +X
+		-- end that far out past its pad, over the drop off the mesa.
+		local function overDip(name, x, mesa, overhang)
+			if mesa > 0 then
+				-- From a stud past the -X pad to a stud short of the +X pad's
+				-- end, so no side of it lines up with a pad's.
+				part("Ground_Mesa", Vector3.new(span + 4, mesa, W + 8), CFrame.new(x - 1, mesa / 2, zY), GRASS, Enum.Material.Grass)
+			end
 			for _, side in { -1, 1 } do
 				local padX = x + side * (dip / 2 + 4)
-				part("Ground_Pad", Vector3.new(8, groundPadTop, W + 4), CFrame.new(padX, groundPadTop / 2, zY), Color3.fromRGB(90, 140, 70), Enum.Material.Grass)
+				part("Ground_Pad", Vector3.new(8, groundPadTop, W + 4), CFrame.new(padX, mesa + groundPadTop / 2, zY), GRASS, Enum.Material.Grass)
 			end
 			local railHeight = hang + T + 0.3
 			for _, side in { -1, 1 } do
-				part("Guardrail", Vector3.new(dip, railHeight, 1), CFrame.new(x, railHeight / 2, zY + side * (W / 2 + 0.5)), METAL, Enum.Material.Metal)
+				part("Guardrail", Vector3.new(dip, railHeight, 1), CFrame.new(x, mesa + railHeight / 2, zY + side * (W / 2 + 0.5)), METAL, Enum.Material.Metal)
 			end
-			return road(name, Vector3.new(span, T, W), CFrame.new(x, hang + T / 2, zY))
+			local length = if overhang > 0 then span + 2 + overhang else span
+			return road(name, Vector3.new(length, T, W), CFrame.new(x - span / 2 + length / 2, mesa + hang + T / 2, zY))
 		end
-		plant(overDip("Road_OverDip", 80), "P32", "gap", "flag", ("edges %.2f over a dip"):format(hang))
-		control(overDip("Road_OnFooting", 150))
-		control(part("Footing", Vector3.new(dip, hang, W), CFrame.new(150, hang / 2, zY), CONCRETE, Enum.Material.Concrete))
+		plant(
+			overDip("Road_OverDip", 80, config.connectMaxStep + 1, 4),
+			"P32",
+			"gap",
+			"flag",
+			("edges %.2f over a dip, its end out over a drop"):format(hang)
+		)
+		control(overDip("Road_OnFooting", 150, 0, 0))
+		local footing = hang - onSupport
+		control(part("Footing", Vector3.new(dip, footing, W), CFrame.new(150, footing / 2, zY), CONCRETE, Enum.Material.Concrete))
 	end
+	-- Control: a concrete step between them, too short to be a strip to
+	-- drive along, so it isn't a road-like slab.
+	control(part("Step", Vector3.new(6, 0.5, 2), CFrame.new(115, 0.25, zY), CONCRETE, Enum.Material.Concrete))
 
 	-- The v0.6 cases (TestCases.lua).
 	local builder = {
