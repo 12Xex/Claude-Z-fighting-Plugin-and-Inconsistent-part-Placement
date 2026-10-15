@@ -37,10 +37,12 @@
 	attribute or tag. It's not scanned, and it never counts as cover, ground
 	or a hiding surface.
 
-	Road-like slabs: flat parts shaped like a road and made of a road
-	material (Config.roadLikeMaterials) that have no kind are listed in the
-	report, so roads nobody named don't go unchecked silently. BuildGuardKind
-	= "None" on a part or any ancestor leaves it off that list.
+	Road-like slabs: flat parts with no kind, made of a road material
+	(Config.roadLikeMaterials), their top within 10° of level and at least
+	1.5 by 6 studs across, are listed in the report, so roads, yards and
+	shoulders nobody named don't go unchecked silently. Not listed: slabs
+	the roads resting on them cover (footings, plinths). BuildGuardKind =
+	"None" on a part or any ancestor leaves it off that list.
 ]]
 
 local Util = require(script.Parent.Util)
@@ -252,43 +254,125 @@ function Classify.optedOut(instance, cache)
 	return result
 end
 
--- Centre of a solid's face that's up (a wedge's slope runs through its centre).
-local function topCentre(s)
+-- A slab for the note is at least this wide and this long (studs, its
+-- shorter and longer horizontal sides): shoulders and lanes count, kerbs
+-- and stepping slabs don't.
+Classify.NOTE_MIN_WIDTH = 1.5
+Classify.NOTE_MIN_LENGTH = 6
+-- ...and its top within this many degrees of level, so pitched roofs don't.
+Classify.NOTE_MAX_TILT = 10
+local NOTE_MIN_UP = math.cos(math.rad(Classify.NOTE_MAX_TILT)) - 1e-4
+-- A slab holds a road up (a footing, a plinth) when the roads resting on
+-- it cover its top: it lies within one road's footprint plus this margin
+-- (studs), or its top's area is at most FOOTING_COVER times the area they
+-- cover.
+Classify.FOOTING_MARGIN = 1
+Classify.FOOTING_COVER = 1.2
+
+-- The plane of a solid's face that's up: a point on it and its normal (a
+-- wedge's slope runs through its centre; a block may be upside down).
+local function topPlane(s)
 	if s.shape == "Wedge" then
-		return s.pos
+		return s.pos, s.cf:VectorToWorldSpace(Vector3.new(0, s.size.Z, -s.size.Y).Unit)
 	end
-	return s.cf:PointToWorldSpace(Vector3.new(0, if s.axes[2].Y < 0 then -s.half.Y else s.half.Y, 0))
+	local up = if s.axes[2].Y < 0 then -s.axes[2] else s.axes[2]
+	return s.pos + up * s.half.Y, up
 end
 
--- Is a road/rail/track (among `kinded`, found through `hash`) resting on the
--- middle of `s`'s top, so `s` holds it up (a footing, a plinth)? A sunk
--- road reaches below that top; one resting on it starts at it.
-local function holdsUpKind(s, hash, kinded)
-	local c = topCentre(s)
-	local reach = Vector3.new(0.1, 0.5, 0.1)
-	for _, i in hash:query(c - reach, c + reach) do
-		local k = kinded[i]
-		local lp = k.cf:PointToObjectSpace(c)
-		if
-			k.min.Y <= c.Y + 0.5
-			and k.max.Y >= c.Y
-			and math.abs(lp.X) <= k.half.X + 0.1
-			and math.abs(lp.Z) <= k.half.Z + 0.1
-		then
-			return true
+-- Is solid `s` shaped like a slab to drive on? Flat by the name rules,
+-- not a corner wedge or a layered item, its top within NOTE_MAX_TILT of
+-- level, and at least NOTE_MIN_WIDTH by NOTE_MIN_LENGTH across.
+local function slabLike(s, config)
+	local part = s.part
+	if s.shape == "CornerWedge" or Classify.isLayered(part) or not Classify.isFlat(part, config) then
+		return false
+	end
+	local _, up = topPlane(s)
+	if up.Y < NOTE_MIN_UP then
+		return false
+	end
+	local size = s.size
+	return math.min(size.X, size.Z) >= Classify.NOTE_MIN_WIDTH and math.max(size.X, size.Z) >= Classify.NOTE_MIN_LENGTH
+end
+
+-- The two axes of `s` nearest level (indexes into s.axes) and their half sizes.
+local function levelAxes(s)
+	local half = { s.half.X, s.half.Y, s.half.Z }
+	local up = 1
+	for i = 2, 3 do
+		if math.abs(s.axes[i].Y) > math.abs(s.axes[up].Y) then
+			up = i
 		end
 	end
-	return false
+	local a, b = up % 3 + 1, (up + 1) % 3 + 1
+	return a, b, half[a], half[b]
+end
+
+-- `s`'s outline seen from above, as { x, z } points.
+local function footprint(s)
+	local a, b, ha, hb = levelAxes(s)
+	local u, v = s.axes[a] * ha, s.axes[b] * hb
+	local out = {}
+	for _, st in { { -1, -1 }, { 1, -1 }, { 1, 1 }, { -1, 1 } } do
+		local p = s.pos + u * st[1] + v * st[2]
+		table.insert(out, { p.X, p.Z })
+	end
+	return out, a, b
+end
+
+-- Do roads/rails/tracks (among `kinded`, found through `hash`) resting on
+-- `s`'s top cover it, so `s` holds them up (a footing, a plinth)? A sunk
+-- road reaches below that top; one resting on it starts at it. A yard or
+-- turnaround a road runs onto isn't covered.
+local function holdsUpKind(s, hash, kinded)
+	local outline = footprint(s)
+	local area = Geometry.polygonArea(outline)
+	local point, normal = topPlane(s)
+	local reach = Classify.FOOTING_MARGIN + 0.05 -- float32 CFrames far out
+	local covered = 0
+	for _, i in hash:query(s.min, s.max + Vector3.new(0, 0.5, 0)) do
+		local k = kinded[i]
+		local kOutline, a, b = footprint(k)
+		local overlap = Geometry.clipPolygon(outline, kOutline)
+		local overlapArea = if #overlap >= 3 then Geometry.polygonArea(overlap) else 0
+		if overlapArea > 1e-3 then
+			-- The top's height where they overlap.
+			local x, z = 0, 0
+			for _, p in overlap do
+				x += p[1] / #overlap
+				z += p[2] / #overlap
+			end
+			local topY = point.Y - (normal.X * (x - point.X) + normal.Z * (z - point.Z)) / normal.Y
+			if k.min.Y <= topY + 0.5 and k.max.Y >= topY then
+				-- Within the road's footprint plus the margin, corner by corner.
+				local half = { k.half.X, k.half.Y, k.half.Z }
+				local within = true
+				for _, corner in outline do
+					local lp = k.cf:PointToObjectSpace(Vector3.new(corner[1], topY, corner[2]))
+					local c = { lp.X, lp.Y, lp.Z }
+					if math.abs(c[a]) > half[a] + reach or math.abs(c[b]) > half[b] + reach then
+						within = false
+						break
+					end
+				end
+				if within then
+					return true
+				end
+				covered += overlapArea
+			end
+		end
+	end
+	return area <= Classify.FOOTING_COVER * covered
 end
 
 -- Flat slabs that look like road surfaces but that no check treats as a
--- road, rail or track, in scan order: shaped like a road by the name rules
--- (flat, top within 45° of level, at least ROAD_MIN_WIDTH across, not a
--- corner wedge) and made of a material in config.roadLikeMaterials. Left
--- out: ground, layered and ignored parts, vehicle parts, anything at or
--- under an instance with BuildGuardKind = "None", and slabs holding up a
--- road/rail/track resting on the middle of their top (a footing, a
--- plinth). Reads properties only: no raycasts.
+-- road, rail or track, in scan order: flat by the name rules, not a corner
+-- wedge, top within NOTE_MAX_TILT of level, at least NOTE_MIN_WIDTH by
+-- NOTE_MIN_LENGTH across, and made of a material in
+-- config.roadLikeMaterials. Left out: ground, layered and ignored parts,
+-- vehicle parts, anything at or under an instance with BuildGuardKind =
+-- "None", and slabs the roads/rails/tracks resting on them cover (a
+-- footing, a plinth: see holdsUpKind). Reads properties only: no raycasts.
 function Classify.unclassified(ctx)
 	local config = ctx.config
 	local materials = {}
@@ -305,7 +389,7 @@ function Classify.unclassified(ctx)
 			material
 			and materials[material.Name]
 			and not ctx.kindOf(part)
-			and looksLike(part, "Road", config)
+			and slabLike(s, config)
 			and not Classify.isGroundLike(part, config, groundCache)
 			and not ctx.isIgnored(part)
 			and not Classify.optedOut(part, noneCache)

@@ -977,7 +977,7 @@ test("unclassified: roads, ground, markings, ignored, None-marked, narrow, steep
 	sub.Name = "Farmyard"
 	sub.Parent = pads
 	slab(part, "Pad", Vector3.new(20, 1, 20), "Mud", CFrame.new(-100, 0.5, 60), sub)
-	slab(part, "Kerb", Vector3.new(30, 0.5, 3), "Concrete", CFrame.new(-100, 0.25, 120))
+	slab(part, "Kerb", Vector3.new(30, 0.5, 1), "Concrete", CFrame.new(-100, 0.25, 120))
 	slab(part, "Bank", Vector3.new(20, 1, 20), "Sand", CFrame.new(0, 8, 100) * CFrame.Angles(math.rad(60), 0, 0))
 	local drum = slab(part, "Drum", Vector3.new(1, 8, 8), "Concrete", CFrame.new(-60, 4, 100))
 	drum.Shape = Enum.PartType.Cylinder
@@ -1010,6 +1010,84 @@ test("unclassified: roads, ground, markings, ignored, None-marked, narrow, steep
 	-- None on a folder only silences the note: a road inside still counts.
 	local inside = slab(part, "Road_Farm", Vector3.new(30, 0.8, W), "Mud", CFrame.new(-100, 3, 60), sub)
 	expect(BG.newContext(root, { world = world }).kindOf(inside) == "Road", "still a road")
+end)
+
+-- Paths of the listed slabs, for messages.
+local function listedPaths(report)
+	local names = {}
+	for _, p in report.unclassified do
+		table.insert(names, report.path(p))
+	end
+	return table.concat(names, ", ")
+end
+
+test("unclassified: a yard a road runs onto is listed; a footing the road covers isn't", function()
+	local root, world, part = setup()
+	-- 60x60 pads: one a road runs onto and ends in the middle of, one with
+	-- no road at all.
+	local yard = slab(part, "Lookout_Yard", Vector3.new(60, 1, 60), "Asphalt", CFrame.new(0, 0.5, 0))
+	part("Road_to_the_Lookout", Vector3.new(40, 0.8, W), CFrame.new(-20, 1.4, 0))
+	local farmyard = slab(part, "Farmyard", Vector3.new(60, 1, 60), "Pebble", CFrame.new(100, 0.5, 0))
+	-- A bed 4 studs wider than its road on each side: bare bed to drive on.
+	local bed = slab(part, "Bed", Vector3.new(40, 1, W + 8), "Concrete", CFrame.new(0, 0.5, 100))
+	part("Road_OnBed", Vector3.new(40, 0.8, W), CFrame.new(0, 1.4, 100))
+	-- Held up whole: a footing exactly under a road, one under two road
+	-- pieces that meet over it, and a plinth a stud past its road all round.
+	slab(part, "Footing", Vector3.new(30, 2, W), "Concrete", CFrame.new(0, 1, 200))
+	part("Road_2", Vector3.new(30, 0.8, W), CFrame.new(0, 2.4, 200))
+	slab(part, "Footing", Vector3.new(60, 2, W), "Concrete", CFrame.new(100, 1, 200))
+	part("Road_3", Vector3.new(30, 0.8, W), CFrame.new(85, 2.4, 200))
+	part("Road_4", Vector3.new(30, 0.8, W), CFrame.new(115, 2.4, 200))
+	slab(part, "Plinth", Vector3.new(12, 2, W + 2), "Concrete", CFrame.new(-100, 1, 200))
+	part("Road_5", Vector3.new(10, 0.8, W), CFrame.new(-100, 2.4, 200))
+	-- The same footing and road turned 30°.
+	local turned = CFrame.new(0, 0, 300) * CFrame.Angles(0, math.rad(30), 0)
+	slab(part, "Footing", Vector3.new(30, 2, W), "Concrete", turned * CFrame.new(0, 1, 0))
+	part("Road_6", Vector3.new(30, 0.8, W), turned * CFrame.new(0, 2.4, 0))
+	local report = BG.scan(root, { world = world })
+	expect(#report.unclassified == 3, listedPaths(report))
+	for _, p in { yard, farmyard, bed } do
+		expect(table.find(report.unclassified, p), p.Name .. " not listed: " .. listedPaths(report))
+	end
+end)
+
+test("unclassified: shoulders and lanes from 1.5 studs across are listed, named like a road or not", function()
+	local root, world, part = setup()
+	-- Hanging 1.4 above the ground beside a road, as the team found them.
+	local shoulder = slab(part, "Shoulder", Vector3.new(40, 0.5, 2.5), "Pebble", CFrame.new(0, 1.65, 20))
+	local named = slab(part, "Road_Shoulder", Vector3.new(40, 0.5, 3), "Pebble", CFrame.new(0, 1.65, 40))
+	local lane = slab(part, "MudRun_Lane", Vector3.new(30, 0.5, 1.5), "Mud", CFrame.new(0, 0.25, 60))
+	-- Too narrow or too short to drive on: a kerb, a stepping slab.
+	slab(part, "Kerb", Vector3.new(30, 0.5, 1), "Concrete", CFrame.new(0, 0.25, 80))
+	slab(part, "Step", Vector3.new(5, 0.5, 2), "Concrete", CFrame.new(0, 0.25, 100))
+	expect(BG.newContext(root, { world = world }).kindOf(named) == nil, "too narrow to be a road by its name")
+	local report = BG.scan(root, { world = world })
+	expect(#report.unclassified == 3, listedPaths(report))
+	for _, p in { shoulder, named, lane } do
+		expect(table.find(report.unclassified, p), p.Name .. " not listed: " .. listedPaths(report))
+	end
+	expect(has(BG.format(report), "[NOTE] 3 flat slab(s) look like road surfaces (Pebble, Mud)"), BG.format(report))
+end)
+
+test("unclassified: only slabs within 10° of level are listed, so pitched roofs aren't", function()
+	local root, world, part = setup()
+	local house = Instance.new("Model")
+	house.Name = "House"
+	house.Parent = root
+	-- A 35° Slate roof: two panels meeting at the ridge.
+	for _, side in { -1, 1 } do
+		slab(part, "Roof", Vector3.new(20, 0.4, 10), "Slate", CFrame.new(0, 12, side * 4) * CFrame.Angles(side * math.rad(35), 0, 0), house)
+	end
+	-- 12° is past the limit; 8° (a gentle apron) isn't.
+	slab(part, "Ramp", Vector3.new(30, 0.5, 10), "Concrete", CFrame.new(50, 4, 0) * CFrame.Angles(0, 0, math.rad(12)))
+	local apron = slab(part, "Apron", Vector3.new(30, 0.5, 10), "Concrete", CFrame.new(100, 3, 0) * CFrame.Angles(0, 0, math.rad(8)))
+	-- A wedge whose slope rises 20°.
+	local wedge = Instance.new("WedgePart")
+	wedge.Name, wedge.Size, wedge.Anchored, wedge.Material = "Ramp", Vector3.new(10, 16 * math.tan(math.rad(20)), 16), true, Enum.Material.Asphalt
+	wedge.CFrame = CFrame.new(150, wedge.Size.Y / 2, 0)
+	wedge.Parent = root
+	local report = BG.scan(root, { world = world })
+	expect(#report.unclassified == 1 and report.unclassified[1] == apron, listedPaths(report))
 end)
 
 test("unclassified: finding them costs no raycasts or part queries", function()
