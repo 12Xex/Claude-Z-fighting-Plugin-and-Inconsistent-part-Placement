@@ -40,7 +40,7 @@ Config.defaults = {
 	-- Two parts whose flat faces only overlap in strips narrower than this
 	-- (studs) are a "zseam" warning, not a z-fight to fix: pieces overlapping
 	-- by a hair along an edge (land facets from a generator) barely show, and
-	-- nudging one would leave a step. 0 = off.
+	-- nudging one would leave a step. 0 = off; at most 0.2.
 	zFightSeamWidth = 0.03,
 	-- Separation a fix nudge leaves between the two faces. Must be larger than
 	-- zFightTolerance so the re-scan comes back clean.
@@ -163,7 +163,7 @@ Config.defaults = {
 Config.schema = {
 	zFightTolerance = { scope = "global", min = 0.001, max = 0.1 },
 	zFightMinOverlapArea = { scope = "global", min = 0, max = 10 },
-	zFightSeamWidth = { scope = "global", min = 0, max = 1 },
+	zFightSeamWidth = { scope = "global", min = 0, max = 0.2 },
 	zFightNudge = { min = 0.002, max = 0.5 },
 	zFightIgnoreTransparency = { scope = "global", min = 0, max = 1 },
 	zFightViewDistance = { min = 0, max = 5000 },

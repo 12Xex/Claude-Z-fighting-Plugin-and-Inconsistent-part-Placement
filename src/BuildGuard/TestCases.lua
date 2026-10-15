@@ -17,8 +17,11 @@
 	  P33 Turnaround         unclassified flag Asphalt pad with no road name: listed in
 	                                           report.unclassified (a note, not an issue)
 	  P34 LandFacets/Facet#2 zseam       flag  wedge facets overlapping 0.02 (2/3 of
-	                                           zFightSeamWidth) along their shared edge
-	                                           (barely visible; not nudged)
+	                                           zFightSeamWidth, at least 1.5x the float
+	                                           sliver a scan ignores there) along their
+	                                           shared edge (barely visible; not nudged).
+	                                           Not planted when seams are off or too
+	                                           narrow for that overlap.
 
 	Controls added here: a wider sleeve, a corner wedge resting on a block,
 	the same 0.02 gap seen up close, wedge facets laid exactly edge to edge,
@@ -119,11 +122,18 @@ function TestCases.faces(b, origin)
 		first.Parent, second.Parent = land, land
 		return first, second
 	end
-	-- 0.02 by default: under the seam width, and over the float-rounding
-	-- sliver a scan ignores far out (about 0.012 at the self-test's spot).
-	local overlap = b.config.zFightSeamWidth * 2 / 3
-	local _, seam = facets(104, overlap)
-	b.plant(seam, "P34", "zseam", "flag", ("wedge facets overlapping %.3f along their shared edge"):format(overlap))
+	-- 2/3 of the seam width (0.02 by default), but at least 1.5x the
+	-- float-rounding sliver a scan ignores where the facets are (as in
+	-- Geometry.coplanarOverlap: about 0.012 at the self-test's spot). With
+	-- seams off, or too narrow for that plus its rounding, it's skipped.
+	local width = b.config.zFightSeamWidth
+	local at = (b.base * o * CFrame.new(104, 2, 0)).Position
+	local sliver = math.max(1e-3, 4 * 2 ^ -23 * math.max(math.abs(at.X), math.abs(at.Y), math.abs(at.Z)))
+	local overlap = math.max(width * 2 / 3, 1.5 * sliver)
+	if width > 0 and overlap + sliver / 2 < width then
+		local _, seam = facets(104, overlap)
+		b.plant(seam, "P34", "zseam", "flag", ("wedge facets overlapping %.3f along their shared edge"):format(overlap))
+	end
 	-- Control: the same facets laid exactly edge to edge.
 	local edgeA, edgeB = facets(116, 0)
 	b.control(edgeA)

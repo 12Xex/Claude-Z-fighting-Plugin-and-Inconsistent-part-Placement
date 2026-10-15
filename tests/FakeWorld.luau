@@ -194,14 +194,20 @@ function FakeWorld.new(root, Geometry)
 
 	-- New terrain is visible to raycasts at once here, so this only fails
 	-- for a probe that misses every block (it would time out in Studio).
+	-- Tests set `cannotYield` to answer as Studio does in a call that can't
+	-- wait, before its raycasts see the new terrain.
+	self.cannotYield = false
 	function self.waitForTerrain(probes)
+		if self.cannotYield then
+			return false, "cannot-yield"
+		end
 		for _, probe in probes do
 			local seen = false
 			for _, b in blocks do
 				seen = seen or Geometry.rayBox(b, probe.origin, probe.direction.Unit, probe.direction.Magnitude) ~= nil
 			end
 			if not seen then
-				return false
+				return false, "timeout"
 			end
 		end
 		return true

@@ -770,6 +770,29 @@ test("layer 0: overlapping items both at layer 0 z-fight (their bottoms are copl
 	expect(report.counts.error == 0 and report.counts.warning == 0, BG.format(report))
 end)
 
+test("layer 0: overlapping items of the same thickness are fixed by sinking one into the surface, not lifting it off", function()
+	-- The plate is the smaller part (the one moved) first, then the rib.
+	for _, plateSize in { Vector3.new(2, 0.22, 2), Vector3.new(3, 0.22, 3) } do
+		local root, world, part = setup()
+		local road = part("Road_Main", Vector3.new(60, 0.8, 22), CFrame.new(0, 0.4, 0))
+		local rib = BG.Layers.place(part("Washboard_Rib", Vector3.new(8, 0.22, 0.6), CFrame.new()), road, { layer = 0, u = 5, rotation = 90 })
+		local plate = BG.Layers.place(part("Plate", plateSize, CFrame.new()), road, { layer = 0, u = 5 })
+		local report = BG.scan(root, { world = world })
+		local z = checks(report, "zfight")
+		expect(#z == 1 and involves(z, rib, plate), BG.format(report))
+		expect(string.find(z[1].message, "Top/Top", 1, true) and string.find(z[1].message, "Bottom/Bottom", 1, true), z[1].message)
+		local plan = BG.planFixes(report)
+		expect(#plan.items == 1 and string.find(plan.items[1].reason, "nudge clear", 1, true), BG.Plan.describe(plan))
+		BG.apply(plan)
+		for _, p in { rib, plate } do
+			local bottom = p.CFrame.Position.Y - p.Size.Y / 2
+			expect(bottom <= 0.8 + 1e-4, ("%s's bottom is at %.3f, above the road top (0.800): light shows under it"):format(p.Name, bottom))
+		end
+		report = BG.scan(root, { world = world })
+		expect(report.counts.error == 0 and report.counts.warning == 0, BG.format(report))
+	end
+end)
+
 T.section("Seams")
 
 -- Two thin wedges making a square land facet (2h across): each is thin
@@ -884,6 +907,30 @@ local function stripedTop(size, n)
 	return out
 end
 
+test("seams: a thin part sunk flush inside a bigger face (an inlay, a wire) is a z-fight with a fix, not a seam", function()
+	local root, world, part = setup()
+	part("Deck", Vector3.new(20, 1, 20), CFrame.new(0, 0.5, 0))
+	-- Narrower than zFightSeamWidth, its top flush in the middle of the deck's.
+	local inlay = part("Inlay", Vector3.new(0.025, 0.5, 12), CFrame.new(0, 0.75, 0))
+	part("Wall", Vector3.new(10, 4, 1), CFrame.new(30, 2, 0))
+	-- A wire whose front is flush with the wall's, across its middle.
+	local wire = part("Wire", Vector3.new(6, 0.025, 0.025), CFrame.new(30, 2, -0.4875))
+	local report = BG.scan(root, { world = world })
+	local z = checks(report, "zfight")
+	expect(#z == 2 and involves(z, inlay) and involves(z, wire) and #checks(report, "zseam") == 0, BG.format(report))
+	for _, issue in z do
+		expect(issue.severity == "error" and BG.isFixable(issue), issue.message)
+	end
+	expect(string.find(involves(z, inlay).message, "Top/Top face(s) overlap 0.30 studs², a strip 0.025 wide", 1, true), involves(z, inlay).message)
+	local plan = BG.planFixes(report)
+	expect(#plan.items == 2, BG.Plan.describe(plan))
+	BG.apply(plan)
+	near(inlay.CFrame.Position.Y + 0.25, 1 + D.zFightNudge, 1e-4, "the inlay's top is nudged clear of the deck's")
+	near(wire.CFrame.Position.Z - 0.0125, -0.5 - D.zFightNudge, 1e-4, "the wire's front is nudged clear of the wall's")
+	report = BG.scan(root, { world = world })
+	expect(report.counts.error == 0 and report.counts.warning == 0, BG.format(report))
+end)
+
 test("seams: mesh triangles are never seams (thin triangles can tile a wide overlap)", function()
 	local root, world, part = setup()
 	part("Slab", Vector3.new(20, 1, 20), CFrame.new(0, 0.5, 0))
@@ -908,6 +955,8 @@ test("seams: zFightSeamWidth is global; 0 turns seams off", function()
 	expect(#checks(report, "zseam") == 0 and #checks(report, "zfight") == 1, BG.format(report))
 	expect(not pcall(BG.setConfig, root, { zFightSeamWidth = 0.1 }, "facets"), "can't be set per model")
 	expect(not pcall(BG.Config.merge, { zFightSeamWidth = -1 }), "out of range")
+	expect(not pcall(BG.Config.merge, { zFightSeamWidth = 0.25 }), "over 0.2: the self-test's planted z-fights (0.4 wide and more) would turn into seams")
+	expect(pcall(BG.Config.merge, { zFightSeamWidth = 0.2 }))
 end)
 
 test("seams far from the origin (float32 positions): a 0.012 overlap is a seam, edge to edge is nothing", function()
