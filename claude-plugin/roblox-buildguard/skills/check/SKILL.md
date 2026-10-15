@@ -1,6 +1,6 @@
 ---
 name: check
-description: Check a Roblox build with BuildGuard (z-fighting on parts, round parts and meshes, duplicates, buried or floating roads/rails, ledges, road edges, steep joins), preview the fixes, and apply them only after the user agrees.
+description: Check a Roblox build with BuildGuard (z-fighting on parts, round parts and meshes, seams, duplicates, buried or floating roads/rails, gaps under road edges, ledges, road edges, steep joins, road-like slabs nothing checks), preview the fixes, and apply them only after the user agrees.
 argument-hint: "[instance path, e.g. workspace.Town]"
 disable-model-invocation: true
 ---
@@ -9,7 +9,7 @@ Check the build at `$ARGUMENTS` (use `workspace` if nothing was given) with Buil
 
 1. Confirm the library exists and is current:
    `local m = game.ServerStorage:FindFirstChild("BuildGuard") return if m then require(m).VERSION else "missing"`.
-   If it's missing or not `0.6.1`, tell the user to install the BuildGuard Studio plugin and press **Install library**, then stop.
+   If it's missing or not `0.6.2`, tell the user to install the BuildGuard Studio plugin and press **Install library**, then stop.
 2. Run the check. For one model:
    ```lua
    local BG = require(game.ServerStorage.BuildGuard)
@@ -26,11 +26,11 @@ Check the build at `$ARGUMENTS` (use `workspace` if nothing was given) with Buil
    return (BG.jobStatus("<id>", { page = 1 }))
    ```
    A long report comes a page (120 lines) at a time: ask for the next page until one ends with `(page m of m, the last page)`.
-   Show the user the report and the fix preview, grouped by check, with each part's path and position. Mention the `Meshes:` line if any meshes were checked by box only (those weren't checked for z-fighting), and every `[NOTE]`.
+   Show the user the report and the fix preview, grouped by check, with each part's path and position. Mention the `Meshes:` line if any meshes were checked by box only (those weren't checked for z-fighting), and every `[NOTE]`, including the one listing flat road-like slabs that aren't checked as roads (they need a road name or tag, or `BuildGuardKind = "None"`).
 3. Ask whether to apply the previewed fixes. If the build holds vehicles that aren't tagged `BuildGuardIgnore`, say that fixes would also move their parts, and leave them out (tag them, or fix a smaller model) unless the user says otherwise. Only after they say yes, run:
    ```lua
    local BG = require(game.ServerStorage.BuildGuard)
    local result = BG.fixAll(<path>)
    return ("%d fix pass(es)\n%s\n\n%s"):format(#result.plans, BG.format(result.report), BG.formatChanges(result))
    ```
-4. Report what was fixed and list everything still open (ledges, edges, slopes, duplicates, mesh overlaps, z-fights between two locked parts, roads under non-ground parts), each with a concrete suggestion. Mention that Ctrl+Z in Studio undoes each fix pass. If the model is built by a script, point out that the fix report's changes need to go into that script, or a rebuild brings the problems back.
+4. Report what was fixed and list everything still open (ledges, edges, gaps under road edges, seams, slopes, duplicates, mesh overlaps, z-fights between two locked parts, roads under non-ground parts), each with a concrete suggestion. For a `gap`: a footing under the road (keeps its top where it is), a negative `roadLift`, or raising the ground. For a `zseam`: pull the pieces apart in their plane, or leave it; never nudge land facets up or down. Mention that Ctrl+Z in Studio undoes each fix pass. If the model is built by a script, point out that the fix report's changes need to go into that script, or a rebuild brings the problems back.

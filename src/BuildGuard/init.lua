@@ -36,7 +36,7 @@ local BuildGuard = {}
 
 -- Matches the Claude plugin's version; the skill checks it so an old copy in
 -- ServerStorage gets reinstalled.
-BuildGuard.VERSION = "0.6.1"
+BuildGuard.VERSION = "0.6.2"
 
 BuildGuard.Config = Config
 BuildGuard.Geometry = Geometry
@@ -54,16 +54,17 @@ local CHECK_ORDER = {
 	duplicate = 1,
 	buried = 2,
 	offground = 3,
-	gap = 3.5,
 	zfight = 4,
 	zgap = 5,
-	meshoverlap = 6,
-	headroom = 7,
-	ledge = 8,
-	edge = 9,
-	slope = 10,
-	routeslope = 11,
-	roadwidth = 12,
+	zseam = 6,
+	meshoverlap = 7,
+	headroom = 8,
+	ledge = 9,
+	edge = 10,
+	gap = 11,
+	slope = 12,
+	routeslope = 13,
+	roadwidth = 14,
 }
 
 local function defaultWorld()

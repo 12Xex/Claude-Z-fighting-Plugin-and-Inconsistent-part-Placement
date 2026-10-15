@@ -292,6 +292,20 @@ local function showReport(report)
 	if #report.issues == 0 then
 		listRow("No problems found.")
 	end
+	-- Road-like slabs no check treats as roads: a note, so they aren't
+	-- missed silently. Clicking it selects them.
+	local slabs = report.unclassified or {}
+	if #slabs > 0 then
+		listRow("[note] " .. BuildGuard.Classify.describeUnclassified(slabs, report.path), nil, function()
+			local live = {}
+			for _, part in slabs do
+				if part.Parent then
+					table.insert(live, part)
+				end
+			end
+			Selection:Set(live)
+		end)
+	end
 end
 
 -- "Scanning: zfight 1200/5000 parts (check 3 of 4, 12.3s)". The parts are
@@ -570,8 +584,8 @@ local function onLayer()
 		return
 	end
 	local layer = tonumber(layerBox.Text)
-	if not layer or layer < 1 or layer % 1 ~= 0 then
-		setStatus("Layer must be a whole number >= 1.")
+	if not layer or layer < 0 or layer % 1 ~= 0 then
+		setStatus("Layer must be a whole number >= 0 (0 rests flush on the surface).")
 		return
 	end
 	local face = FACES[state.face]

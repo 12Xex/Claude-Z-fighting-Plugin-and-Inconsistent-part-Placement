@@ -501,6 +501,18 @@ test("library VERSION matches the Claude plugin version", function()
 	expect(BG.VERSION == manifest.version, ("library %s vs plugin %s"):format(BG.VERSION, manifest.version))
 	local skill = fs.readFile("claude-plugin/roblox-buildguard/skills/roblox-building/SKILL.md")
 	expect(string.find(skill, '"' .. BG.VERSION .. '"', 1, true), "SKILL.md must check for VERSION " .. BG.VERSION)
+	-- Every version check in the skills names this version and no other.
+	for _, file in {
+		"skills/roblox-building/SKILL.md",
+		"skills/roblox-building/workflows.md",
+		"skills/check/SKILL.md",
+	} do
+		local text = fs.readFile("claude-plugin/roblox-buildguard/" .. file)
+		expect(string.find(text, BG.VERSION, 1, true), file .. " must check for VERSION " .. BG.VERSION)
+		for version in string.gmatch(text, "%d+%.%d+%.%d+") do
+			expect(version == BG.VERSION, ("%s names version %s, not %s"):format(file, version, BG.VERSION))
+		end
+	end
 end)
 
 T.section("Config")
@@ -627,7 +639,8 @@ T.section("Self-test (planted-problem scene)")
 -- `place` settings are attributes on the place: in Studio the self-test
 -- builds its scene in workspace, so place-wide project numbers apply to it.
 for _, case in {
-	{ config = {} },
+	-- At its own default spot, far out where float32 positions are coarse.
+	{ config = {}, atDefault = true },
 	{ config = { maxLedge = 0.5, maxSlopeChange = 8 } },
 	{ config = { maxSlopeChange = 30 }, place = { maxLedge = 0.8, minRoadWidth = D.minRoadWidth + 2 } },
 	-- Roads and track beds sunk into the ground place-wide.
@@ -640,7 +653,8 @@ for _, case in {
 	for k, v in case.place or {} do
 		table.insert(label, "place-wide " .. k .. "=" .. tostring(v))
 	end
-	test("self-test passes with " .. (if #label > 0 then table.concat(label, ", ") else "defaults"), function()
+	local name = "self-test passes with " .. (if #label > 0 then table.concat(label, ", ") else "defaults")
+	test(name .. (if case.atDefault then " at SelfTest.DEFAULT_ORIGIN" else ""), function()
 		local root = Instance.new("Folder")
 		root.Name = "Workspace"
 		for k, v in case.place or {} do
@@ -674,7 +688,7 @@ for _, case in {
 			world = world,
 			parent = root,
 			config = case.config,
-			origin = Vector3.new(4000, 0, 4000),
+			origin = if case.atDefault then nil else Vector3.new(4000, 0, 4000),
 		})
 		BG.Config.place, BG.withUndo = place, withUndo
 		expect(ok, tostring(result))

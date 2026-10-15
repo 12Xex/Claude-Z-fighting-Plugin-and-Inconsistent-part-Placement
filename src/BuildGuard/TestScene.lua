@@ -46,9 +46,10 @@
 	footing filling the dip under it (and the footing). The gentle ramp off
 	Road_E sits on an embankment: under flatTiltDegrees it counts as flat.
 
-	P17 to P26 and P33 (meshes, round parts, corner wedges, far view,
+	P17 to P26, P33 and P34 (meshes, round parts, corner wedges, far view,
 	repeated names, names that aren't roads, a road-like pad with no road
-	name) are built by TestCases.lua and listed there.
+	name, land facets overlapping by a hair) are built by TestCases.lua and
+	listed there.
 
 	Every size and height comes from the config (road width, lifts, limits),
 	so the scene plants real violations and real non-violations whatever

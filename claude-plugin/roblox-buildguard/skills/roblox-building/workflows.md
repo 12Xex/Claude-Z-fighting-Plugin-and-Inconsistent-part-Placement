@@ -8,7 +8,7 @@ local BG = require(game.ServerStorage.BuildGuard)
 
 ## Every session
 
-1. Run the check from SKILL.md step 0 (installed, and version `"0.6.1"`).
+1. Run the check from SKILL.md step 0 (installed, and version `"0.6.2"`).
 2. Find where things go. Print the top level of `workspace` and the model you'll work in, so you build into the user's existing structure:
    ```lua
    local out = {}
@@ -30,7 +30,8 @@ local BG = require(game.ServerStorage.BuildGuard)
 ## Landscape and terrain
 
 1. Shape terrain first (hills, pits, river channels, cave volumes) with `workspace.Terrain:FillBlock`, `FillBall` and so on. Terrain is stored in 4-stud voxels, so keep carve sizes and positions on multiples of 4.
-2. Then lay out roads and rails on it (below). Snapping follows whatever terrain is there, so terrain changes after snapping mean snapping again.
+2. End that call there. New terrain isn't visible to raycasts for a frame or two, so a snap or check in the same call can look straight through it (a road under a new hill is found buried but not lifted, a new tunnel roof is missed). Snap and check in a later call.
+3. Then lay out roads and rails on it (below). Snapping follows whatever terrain is there, so terrain changes after snapping mean snapping again.
 
 ## Roads
 
@@ -74,8 +75,35 @@ local BG = require(game.ServerStorage.BuildGuard)
    Change direction gradually: no more than 20° between neighbours, and no piece steeper than 20° overall. Use switchbacks for anything steeper.
    A `WedgePart` named `Road_...` also works as a ramp from the ground: its slope is the driving surface and its foot is at ground level. Size it width × rise × run with the rise at most 0.36 × the run (20°); it climbs towards its back (+Z), so its LookVector points downhill. Markings can't be layered onto a wedge's slope.
    A ramp's sides rise above the ground beside them. Run guardrails along them (a part beside an edge ends the edge check there) or shape the terrain up to them, or the `edge` check flags them.
-4. Markings go on with `BG.Layers.place` (see Details).
-5. Run `return BG.check(roads)`. Ledge, edge, slope, route slope and width warnings mean the layout needs changing; they have no automatic fix. An `edge` warning means the ground beside the road is too far below (or above) its top: make the road thinner, or shape the terrain up to the road's edge. Pieces up to 0.5 studs apart (seen from above) count as joined, so a small gap between two pieces is checked for its step and angle too.
+4. **Uneven ground:** a straight piece rests on the highest ground under it, so over rolling land its edges hang over the dips (`gap` warnings when a gap is over `maxHover`, 0.25). To keep each road's top where it is, put a footing under it: a plain part as wide and long as the road, its top at the road's bottom, reaching down into the ground. A part under a road counts as ground, so the gap check passes, and a later snap leaves the road where it is. Its name must not start with Road/Rail/Track, it should be opaque (it fills the dips you'd otherwise see light through), and its top must not reach up into the road, or its sides z-fight the road's:
+   ```lua
+   local function footing(road, depth)
+   	local f = Instance.new("Part")
+   	f.Name = "Footing_" .. road.Name
+   	f.Size = Vector3.new(road.Size.X, depth, road.Size.Z)
+   	f.CFrame = road.CFrame * CFrame.new(0, -(road.Size.Y + depth) / 2, 0)
+   	f.Anchored = true
+   	f.Material = Enum.Material.Ground
+   	f.Parent = road.Parent
+   	return f
+   end
+   local made = 0
+   for _, road in workspace.Map.HaulRoad_North:GetChildren() do
+   	if road:IsA("BasePart") and road.Name:match("^Road") then
+   		footing(road, 4)   -- deeper than the deepest dip under it
+   		made += 1
+   	end
+   end
+   return made .. " footing(s)\n" .. BG.check(workspace.Map.HaulRoad_North)
+   ```
+   Or sink the roads with a negative `roadLift` (with the user's OK), or shape the terrain up under them. A footing closes the gap under a road, not the drop beside it: an `edge` warning there still needs the ground shaped up to the edge, or guardrails.
+5. Markings go on with `BG.Layers.place` (see Details).
+6. Name or tag every surface vehicles drive on (yards, shoulders, turnarounds, lanes). A flat slab of a road material (asphalt, concrete, pebble and so on) that isn't one is listed in the report's `[NOTE] ... flat slab(s) look like road surfaces ... but aren't checked as roads`. Name or tag the ones that are roads. Mark the rest so they drop off the list, once on their folder:
+   ```lua
+   workspace.Map.Yards:SetAttribute("BuildGuardKind", "None")   -- pads nobody drives on
+   return BG.check(workspace.Map)
+   ```
+7. Run `return BG.check(roads)`. Ledge, edge, gap, slope, route slope and width warnings mean the layout needs changing; they have no automatic fix. An `edge` warning means the ground beside the road is too far below (or above) its top: make the road thinner, or shape the terrain up to the road's edge. Pieces up to 0.5 studs apart (seen from above) count as joined, so a small gap between two pieces is checked for its step and angle too.
 
 ## Rails and minecart tracks
 
@@ -100,6 +128,11 @@ local BG = require(game.ServerStorage.BuildGuard)
 
 1. Carve the river channel, then fill it with `Enum.Material.Water`.
 2. **Snapping ignores water.** A road over a river with nothing under it but water would snap down onto the riverbed. Build the bridge's supports (abutments or pillars) first. Snapping rests a road on the highest ground under it, so it sits on them. Then snap the bridge road and check it.
+3. A bridge deck more than 4 studs (`connectMaxStep`) above what's under it is a span, not a gap. A lower one gets `gap` warnings: set `maxHover` on the bridge's model, with a reason:
+   ```lua
+   BG.setConfig(workspace.Map.CreekBridge, { maxHover = 3 }, "low bridge deck over the creek")
+   return BG.check(workspace.Map.CreekBridge)
+   ```
 
 ## Town buildings
 
@@ -127,9 +160,9 @@ local BG = require(game.ServerStorage.BuildGuard)
    BG.Layers.place(arrow, road, { layer = 2 })   -- overlaps the stripe
    return "placed sign, stripe and arrow"
    ```
-2. The item's `Size.Y` is its thickness. Items that overlap on the same face need different layers and the same thickness.
+2. The item's `Size.Y` is its thickness. Items that overlap on the same face need different layers and the same thickness. A raised detail that overlaps nothing else on the face (a washboard rib, a plate, a pad) can go on layer 0, flush with no gap under it: `BG.Layers.place(rib, road, { layer = 0, rotation = 90 })`. Two overlapping layer-0 items z-fight.
 3. To lift details you've already placed by eye, keep where they are: `{ layer = 1, keepPosition = true }`.
-4. Details on map-sized models seen from far away (quarry walls, billboards across the pit): 0.02 gaps can flicker on phones beyond about 130 studs. Ask the user to check the far-view rig first: the plugin's **Far-view test rig** button builds it (or `BG.TestScene.buildFarView(workspace)`). They publish the place to a test place, join it on a phone (players spawn on the `View_100`, `View_300` and `View_600` pads; disable the map's own SpawnLocations while testing, or reset to land on another pad), and find the smallest gap that doesn't flicker at their viewing distance. Delete the rig afterwards. When they've picked a distance, set it on the model: `BG.setConfig(model, { zFightViewDistance = 300 }, "seen across the pit")`. Checks then want bigger gaps there (`zgap` warnings), fixes leave them, and layers lift more.
+4. Details on map-sized models seen from far away (quarry walls, billboards across the pit): 0.02 gaps can flicker on phones beyond about 130 studs. Ask the user to check the far-view rig first: the plugin's **Far-view test rig** button builds it at (-24576, 0, -24576) (or `BG.TestScene.buildFarView(workspace)`). It refuses to build where any part, terrain or water already is and says what's there; then pick an empty spot: `BG.TestScene.buildFarView(workspace, Vector3.new(x, 0, z))`. They publish the place to a test place, join it on a phone (players spawn on the `View_100`, `View_300` and `View_600` pads; disable the map's own SpawnLocations while testing, or reset to land on another pad), and find the smallest gap that doesn't flicker at their viewing distance. Delete the rig afterwards. When they've picked a distance, set it on the model: `BG.setConfig(model, { zFightViewDistance = 300 }, "seen across the pit")`. Checks then want bigger gaps there (`zgap` warnings), fixes leave them, and layers lift more.
 
 ## Meshes (Blender imports)
 
@@ -164,7 +197,7 @@ After each model, tell the user:
 2. **The final check:** errors (must be 0) and warnings.
 3. **What was fixed automatically:** how many changes, and that Ctrl+Z undoes them. For script-built models, that you put the fix report's changes in the script.
 4. **Every line under "Config overrides in effect":** what you changed and why.
-5. **Every warning and `[NOTE]` left**, with the part paths and what you suggest.
+5. **Every warning and `[NOTE]` left**, with the part paths and what you suggest. That includes the road-like slabs that aren't checked as roads.
 6. **What was only partly checked:** meshes checked by box only, so not for z-fighting (the `Meshes:` line).
 7. **What isn't checked yet** that this build relied on: buildings on uneven ground, NPC footing, cave entrance width.
 
@@ -186,5 +219,11 @@ After each model, tell the user:
 | `Meshes: ... by box only (no permission ...)` | Those meshes belong to another creator, so their triangles can't be read and they weren't checked for z-fighting. Check them by eye, or re-upload them under the user's account. |
 | `duplicate` | A mesh or part imported twice at the same place. Delete one. |
 | `edge` | The road's top is more than 1 stud above (or below) the ground beside it. Use 0.8-thick roads, raise the terrain to the road, sink roads with a negative `roadLift` (with the user's OK), or (on a ramp's sides) add guardrails. |
+| `gap` | The road rests on the ground but hangs over a dip at its edge (light shows under it). Put a footing under it (Roads step 4), sink it with a negative `roadLift` (with the user's OK), or raise the ground. On a low bridge, set `maxHover` on its model. |
+| `zseam` | Two pieces laid edge to edge overlap in a strip under 0.03 wide (often land facets from a generator). Barely visible: pull them apart in their plane, or list them to the user. Don't nudge them up or down; that leaves a step. |
+| `[NOTE] ... flat slab(s) look like road surfaces ... but aren't checked as roads` | Name or tag the ones vehicles drive on (`Road`), and set `BuildGuardKind = "None"` on the rest, or on their folder (Roads step 6). |
+| `BuildGuard self-test: not run, nothing was built. ... is in the test scene's area ...` | Something (a part, terrain or water) is where the self-test builds. Run it on an empty spot: `BG.selfTest({ origin = Vector3.new(x, 0, z) })`. |
+| `terrain    new terrain wasn't visible to raycasts ...` (self-test) | Run the self-test again (from the command bar or the plugin's button if it keeps happening). |
+| `BuildGuard: far-view rig not built: ... is in its area ...` | Build it on an empty spot: `BG.TestScene.buildFarView(workspace, Vector3.new(x, 0, z))`. |
 | `zgap` | In a far-view model, same-facing faces are closer than the gap that holds at its view distance. Apply the fix. |
 | `no wheels found` (checkVehicle) | The wheels don't spin on hinges and aren't named `Wheel_FL`/`Tire_RearLeft` and so on. Tag them `BuildGuardWheel`. |

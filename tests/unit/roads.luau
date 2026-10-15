@@ -883,6 +883,30 @@ test("gap: the edge step is still checked on a road with a gap under it", functi
 	expect(edges["+Z"] and edges["-Z"], "the drop beside it is a step too:\n" .. BG.format(report))
 end)
 
+test("issue order: zseam comes right after zgap, and gap right after edge", function()
+	local root, world, part = setup()
+	overDip(part, "Road_1", Vector3.new(24, 0.8, W), 1.21, 12)
+	-- A sign 0.02 off its wall in a model seen from 300 studs: a zgap.
+	local far = Instance.new("Model")
+	far.Name = "Quarry"
+	far.Parent = root
+	BG.setConfig(far, { zFightViewDistance = 300 }, "seen across the pit")
+	part("Wall", Vector3.new(10, 10, 1), CFrame.new(0, 5, 100), far)
+	part("Sign", Vector3.new(2, 2, 0.4), CFrame.new(0, 5, 100 - 0.32), far)
+	-- Two blocks overlapping by 0.01 along their shared side: a zseam.
+	part("BlockA", Vector3.new(4, 2, 4), CFrame.new(-100, 10, 0))
+	part("BlockB", Vector3.new(4, 2, 4), CFrame.new(-100 + 3.99, 10, 0))
+	local report = BG.scan(root, { world = world })
+	local order = {}
+	for _, issue in report.issues do
+		if order[#order] ~= issue.check then
+			table.insert(order, issue.check)
+		end
+	end
+	local text = table.concat(order, ", ")
+	expect(text == "zgap, zseam, edge, gap", text .. "\n" .. BG.format(report))
+end)
+
 T.section("Roads: road-like slabs that aren't checked as roads")
 
 local function slab(part, name, size, material, cf, parent)

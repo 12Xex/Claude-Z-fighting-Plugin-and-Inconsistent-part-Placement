@@ -1,6 +1,6 @@
 ---
 name: roblox-building
-description: Rules for building or editing parts in a Roblox place through a Roblox Studio MCP server (execute_luau, run_code or similar). Use whenever creating, moving or detailing parts, models, meshes, roads, rails, signs, markings or trim in Studio, or placing imported vehicles. Covers z-fighting (flat faces, round parts, meshes), layering details on surfaces, snapping roads/rails to the ground, road edges and drivability, setting per-model BuildGuard config, and checking the build before finishing.
+description: Rules for building or editing parts in a Roblox place through a Roblox Studio MCP server (execute_luau, run_code or similar). Use whenever creating, moving or detailing parts, models, meshes, roads, rails, signs, markings or trim in Studio, or placing imported vehicles. Covers z-fighting (flat faces, round parts, meshes), layering details on surfaces, snapping roads/rails to the ground, footings for roads over uneven ground, road edges and drivability, setting per-model BuildGuard config, and checking the build before finishing.
 ---
 
 # Building in Roblox Studio with BuildGuard
@@ -19,7 +19,7 @@ return if m then "BuildGuard " .. tostring(require(m).VERSION) else "BuildGuard 
 ```
 
 - **Missing:** stop and ask the user to install the BuildGuard Studio plugin and press **Install library** in its panel. Don't build without it.
-- **Not `"0.6.1"`:** the place has an old copy. Ask the user to press **Install library** again, then re-run the check.
+- **Not `"0.6.2"`:** the place has an old copy. Ask the user to press **Install library** again, then re-run the check.
 
 For the step-by-step order to build each kind of thing (session start, landscape, roads, rails, tunnels and caves, rivers, buildings, signs and details, meshes, vehicles, NPCs) and how to report back, follow [workflows.md](workflows.md).
 
@@ -33,9 +33,10 @@ For the step-by-step order to build each kind of thing (session start, landscape
   BG.Layers.place(sign, wall, { face = "Front", layer = 1, v = 2 })
   BG.Layers.place(arrow, road, { layer = 2, rotation = 90 })          -- overlaps layer 1
   BG.Layers.place(item, surface, { layer = 1, keepPosition = true })  -- keep where it is
-  return "placed 4 items"
+  BG.Layers.place(rib, road, { layer = 0, u = 12, rotation = 90 })    -- flush: a raised rib
+  return "placed 5 items"
   ```
-  The item's `Size.Y` is its thickness off the surface. `u`/`v` move it across the face from the centre. Overlapping items need different layers and the same thickness. Layers can't put anything on a WedgePart's slope.
+  The item's `Size.Y` is its thickness off the surface. `u`/`v` move it across the face from the centre. Overlapping items need different layers and the same thickness. Layer 0 rests the item flush on the face, with no sliver of light under it: use it for raised details that overlap no other layered item (washboard ribs, plates, pads). Two overlapping layer-0 items z-fight, like any two on one layer. Layers can't put anything on a WedgePart's slope.
 - **Roads, rails and tracks get snapped, not hand-positioned in Y:**
   ```lua
   local BG = require(game.ServerStorage.BuildGuard)
@@ -44,7 +45,9 @@ For the step-by-step order to build each kind of thing (session start, landscape
   return BG.Plan.describe(plan) .. ("\n%d skipped"):format(#skipped)
   ```
   Name them so their **first word** is `Road`/`Street`/`Highway`, `Rail`/`Railroad`, or `Track` (`Road_North_01`, not `HaulRoad_01`), and build them flat side up: a road at least 4 studs wide, top within 45° of level. Or tag them `Road`/`Rail`/`Track`, or set `BuildGuardKind`; tags and the attribute count whatever the shape. Other names and shapes are safe: `StreetLamp`, `RoadSign`, `Highway_Exit` signs, `Road_Guardrail`, `RoadBarrier`, `RailFence`, `StreetLight` heads, `Road_Kerb` strips, `BedRail`, `Railing` and anything placed with Layers (a `RoadLine` marking, a sign on a board) are never treated as roads or rails. Ramps (tilted over 5°) aren't snapped. Snapping rests roads right on whatever is under them (no gap) and rails 0.2 above their bed, and never moves ignored, locked or vehicle parts (they're listed in `skipped`). If the user wants roads sunk into bumpy terrain, so the ground meets their sides instead of leaving gaps under them, that's a negative `roadLift` set place-wide with their OK: `BG.setProjectConfig({ roadLift = -0.3 }, "roads sit into the terrain")`. A road only sinks into terrain or ground parts, never into a plinth or bridge support, wedge ramps never sink, and its top always stays 0.05 above the ground.
+- **No gaps under road edges.** A snap rests a straight road on the highest ground under it, so over rolling land it hangs over the dips and light shows under its edges. The `gap` check warns when the gap under a resting road's edges is over `maxHover` (0.25 studs; 0.45 for rails, which sit 0.2 up). To keep a road's top where it is over uneven ground, give it a **footing** hidden under it (Roads in [workflows.md](workflows.md)): a plain part as wide and long as the road, its top at the road's bottom, reaching down into the ground. A part under a road counts as ground, so the gap check passes, and a snap leaves the road where it is. Don't start its name with Road/Rail/Track (`Footing_Road_01`), keep it opaque so it fills the dips, and don't let its top reach up into the road (its sides would z-fight the road's). The other ways: sink the road with a negative `roadLift` (with the user's OK), or shape the terrain up under it. A footing doesn't change the drop beside the road, so `edge` warnings still need the ground shaped up to the edge, or guardrails.
 - **Roads must be thin enough to drive onto.** The step from the ground beside a road up onto its top must stay within the 1-stud ledge limit. A snapped road rests right on the ground, so its thickness is the step: make road parts **0.8 studs thick** (never more than 1), sink them with a negative `roadLift`, or shape the terrain up to the road's top.
+- **Name every surface vehicles drive on.** Yards, shoulders, turnarounds and lanes count as roads only when named or tagged. The report's `[NOTE] ... flat slab(s) look like road surfaces ... but aren't checked as roads` lists flat slabs of road materials (asphalt, concrete, pebble and so on) that nothing checks. Name or tag the ones that are roads; set `BuildGuardKind = "None"` on the ones that aren't (on the part, or once on their folder or model).
 - **Nothing sits on top of a road, rail or track bed** except layered items (markings, sleepers). Buildings, crates, terrain and props must stay off them.
 - **Roads and rails must be drivable by a loaded truck.** The project limits are:
   - every road at least **22 studs wide** across its driving direction;
@@ -52,6 +55,7 @@ For the step-by-step order to build each kind of thing (session start, landscape
   - at most a **1-stud step** and a **20° angle change** where two pieces join, and at most a 1-stud step from the ground onto a road edge.
 
   Check the limits for a model with `return BG.explainConfig(workspace.YourBuild)`. To climb more than 20°, build switchbacks; don't make a steeper ramp.
+- **Terrain in one call, snap and check in the next.** New terrain isn't visible to raycasts for a frame or two. A snap or check in the same call as the fill can look straight through it: a road under a new hill is found buried but not lifted, and a new tunnel roof is missed.
 - **Ground:** Terrain is ground. A big part that is ground (a floor slab under the map) must be tagged `BuildGuardGround`; size alone doesn't make it ground. Tag a folder or model and every part in it is ground.
 - **Tunnels and caves:** build the tunnel floor first, then snap roads and rails onto it. Snapping finds the tunnel floor, not the mountain above. A road or rail buried deeper than 20 studs isn't moved; carve its tunnel instead. Headroom comes from the place-wide `roadHeadroom` (set from the truck), or from the tunnel's model: `BG.setConfig(mine, { roadHeadroom = 14 }, "13-stud haul truck")`. A road deck crossing above a road counts as its ceiling too.
 - **Meshes:** don't import a mesh twice (duplicates are errors). BuildGuard checks the triangles of meshes the place owner owns. Other meshes, unions and parts drawn by a SpecialMesh are checked by their box only: for duplicates and overlapping boxes, **not for z-fighting**. The report's `Meshes:` line says how many and why; tell the user, and check those by eye. Flat details on a mesh still go through Layers.
@@ -122,6 +126,11 @@ return BG.format(result.report) .. "\n\n" .. BG.formatChanges(result)   -- what'
 
 If a script builds the model, copy every change from the fix report into that script (each line gives the `part.CFrame *=` or `part.Size +=` to add). Otherwise the next rebuild brings the problems back. If `fixAll` stops with `plan is stale`, something changed during the scan: run it again.
 
-The build is only done when the final report shows **0 errors**. Invalid config attributes also count as errors, and so does a z-fight marked `(not auto-fixable)` because both parts are locked or ground: move one by hand. Tell the user about every line under "Config overrides in effect", the `Meshes:` line when meshes were checked by box only (not for z-fighting), and every `[NOTE]` (a mesh whose box doesn't match what you see). Warnings left over (ledges, edges, slopes, headroom, gaps for far viewing, roads under non-ground parts) must be fixed in the build, or listed to the user by name with the reason. Never say a build is clean without having run the check.
+The build is only done when the final report shows **0 errors**. Invalid config attributes also count as errors, and so does a z-fight marked `(not auto-fixable)` because both parts are locked or ground: move one by hand. Tell the user about every line under "Config overrides in effect", the `Meshes:` line when meshes were checked by box only (not for z-fighting), and every `[NOTE]` (a mesh whose box doesn't match what you see). Warnings left over (ledges, edges, gaps under road edges, seams, slopes, headroom, gaps for far viewing, roads under non-ground parts) must be fixed in the build, or listed to the user by name with the reason. Pass on the `[NOTE]` listing road-like slabs that aren't checked as roads too. Never say a build is clean without having run the check.
+
+- Each z-fight message ends with the overlap's width (`a strip 0.050 wide`). A `zseam` warning is pieces laid edge to edge that overlap by a hair, narrower than `zFightSeamWidth` (0.03), often land facets from a generator. It barely shows: pull the pieces apart in their plane, or list it to the user. Don't nudge facets up or down; that leaves a step.
+- A `gap` warning means light shows under a road's edge: add a footing, sink the road, or raise the ground (see Roads above). On a low bridge (its deck less than 4 studs above what's under it) set `maxHover` on the bridge's model instead, with a reason.
+
+To prove BuildGuard works in this place, run `return BG.selfTest().text`. It builds a test scene at (-24576, 0, 24576), checks and fixes it, then removes it. It refuses to build where any part, terrain or water already is, and says what is there: pick an empty spot with `BG.selfTest({ origin = Vector3.new(x, 0, z) })`. If its only failure is the `terrain` row, run it again.
 
 For the full API and what each check means, see [reference.md](reference.md).

@@ -16,8 +16,9 @@
 	  P26 TubTop#3           zfight      fix   one of three same-named parts (found by path)
 	  P33 Turnaround         unclassified flag Asphalt pad with no road name: listed in
 	                                           report.unclassified (a note, not an issue)
-	  P34 LandFacets/Facet#2 zseam       flag  wedge facets overlapping 0.01 along their
-	                                           shared edge (barely visible; not nudged)
+	  P34 LandFacets/Facet#2 zseam       flag  wedge facets overlapping 0.02 (2/3 of
+	                                           zFightSeamWidth) along their shared edge
+	                                           (barely visible; not nudged)
 
 	Controls added here: a wider sleeve, a corner wedge resting on a block,
 	the same 0.02 gap seen up close, wedge facets laid exactly edge to edge,
@@ -118,8 +119,11 @@ function TestCases.faces(b, origin)
 		first.Parent, second.Parent = land, land
 		return first, second
 	end
-	local _, seam = facets(104, 0.01)
-	b.plant(seam, "P34", "zseam", "flag", "wedge facets overlapping 0.01 along their shared edge")
+	-- 0.02 by default: under the seam width, and over the float-rounding
+	-- sliver a scan ignores far out (about 0.012 at the self-test's spot).
+	local overlap = b.config.zFightSeamWidth * 2 / 3
+	local _, seam = facets(104, overlap)
+	b.plant(seam, "P34", "zseam", "flag", ("wedge facets overlapping %.3f along their shared edge"):format(overlap))
 	-- Control: the same facets laid exactly edge to edge.
 	local edgeA, edgeB = facets(116, 0)
 	b.control(edgeA)
