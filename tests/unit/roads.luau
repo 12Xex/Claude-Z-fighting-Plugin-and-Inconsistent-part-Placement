@@ -998,6 +998,55 @@ test("gap: an end overhanging a cliff drops only that stretch of the edge; a dip
 	end
 end)
 
+test("gap: a level trench running up to the drop under an overhanging end is still a gap; a bank sloping up out of the drop isn't", function()
+	-- Ground with its top at 0 for x <= 10, and nothing beyond (or ground 12
+	-- below). A road 44 long overhangs the drop by 4, and a trench 1.5 deep
+	-- runs under its -Z edge from x = -6 to `trenchEnd`. With no trench, the
+	-- shelf's edge slopes down at 45° instead, and the road overhangs it by 8.
+	local t0, t1 = -W / 2 - 1, -W / 2 + 2
+	for _, place in { { "origin", CFrame.new() }, { "far out", CFrame.new(-24576, 0, 24576) * CFrame.Angles(0, math.rad(30), 0) } } do
+		local at = place[2]
+		for _, below in { "void", "deep" } do
+			for _, trenchEnd in { 8, 10, false } do
+				local label = ("%s, %s, %s: "):format(place[1], below, if trenchEnd then "trench to x = " .. trenchEnd else "sloped edge")
+				local root, world, part = setup()
+				root:FindFirstChild("Ground"):Destroy()
+				local function block(x0, x1, z0, z1, y0, y1)
+					part("Ground_Shelf", Vector3.new(x1 - x0, y1 - y0, z1 - z0), at * CFrame.new((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2))
+				end
+				block(-60, 10, -30, 30, -8, -1.5)
+				block(-60, 10, t1, 30, -1.5, 0)
+				block(-60, 10, -30, t0, -1.5, 0)
+				block(-60, trenchEnd and -6 or 10, t0, t1, -1.5, 0)
+				if trenchEnd and trenchEnd < 10 then
+					block(trenchEnd, 10, t0, t1, -1.5, 0)
+				end
+				if not trenchEnd then
+					-- The slope is the top face of a block 4 thick, from (10, 0) down to (18, -8).
+					local mid = at * CFrame.new(14, -4, 0) * CFrame.Angles(0, 0, math.rad(-45))
+					part("Ground_Bank", Vector3.new(8 * math.sqrt(2), 4, 60), mid * CFrame.new(0, -2, 0))
+				end
+				if below == "deep" then
+					block(10, 60, -30, 30, -14, -12)
+				end
+				local length = if trenchEnd then 44 else 48
+				local road = part("Road_Shelf", Vector3.new(length, 0.8, W), at * CFrame.new(-30 + length / 2, D.roadLift + 0.4, 0))
+				local report = BG.scan(root, { world = world })
+				local gaps = gapsOf(report, road)
+				expect(#checks(report, "offground") == 0, label .. BG.format(report))
+				if not trenchEnd then
+					expect(#gaps == 0, label .. BG.format(report))
+					continue
+				end
+				expect(#gaps == 1 and gaps[1].edge == "-Z", label .. BG.format(report))
+				near(gaps[1].value, 1.5, 1e-3, label .. "down into the trench")
+				local x = at:PointToObjectSpace(gaps[1].position).X
+				expect(x > -6 and x < trenchEnd, label .. Util.vector(gaps[1].position))
+			end
+		end
+	end
+end)
+
 test("gap: over water it's measured to the water surface; the snap still looks through water", function()
 	-- A beach road with its +Z edge 3 studs out over the sea: deep water
 	-- (the seabed more than connectMaxStep down), then shallow water.

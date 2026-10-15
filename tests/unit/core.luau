@@ -654,6 +654,11 @@ for _, case in {
 	-- as a call that can't wait for the new terrain: it scans anyway (the
 	-- fake world's raycasts see the terrain) and says so.
 	{ config = { zFightSeamWidth = 0.2 }, cannotYield = true },
+	-- A big nudge: P4's crossing markings are sized from it so the fix can
+	-- sink them, not lift them into the buried probe over the road. At 0.23
+	-- markings that thick would reach the probe themselves: P4 is left out.
+	{ config = { zFightNudge = 0.2 } },
+	{ config = { zFightNudge = 0.23 } },
 } do
 	local label = {}
 	for k, v in case.config do
