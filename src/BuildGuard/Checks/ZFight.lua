@@ -12,7 +12,12 @@
 	    reported once, as a duplicate.
 
 	Faces that touch back-to-back (a part resting on another) point opposite
-	ways and are left alone: those faces are hidden, not flickering.
+	ways and are left alone: those faces are hidden, not flickering. So is a
+	same-facing overlap covered all over, back to back, by faces of third
+	parts that show: a footing's top flush with the ground pad it passes
+	through, both under the road resting on them, or two layer-0 items'
+	bottoms on the road. Such contacts are dropped; one only partly covered
+	still counts.
 
 	Seams: each flat overlap's width is its thinnest extent. A pair of part
 	faces overlapping only in strips narrower than zFightSeamWidth, each
@@ -32,14 +37,19 @@
 	clears the other by the pair's face gap (zFightNudge unless the model is
 	seen from far away). A pair whose parts are both locked (or ground) has
 	no mover: its issue says so and isn't auto-fixable.
-	  * Flat faces: the mover is nudged outward. If it z-fights on both
-	    opposite sides of one axis, a nudge clears both but sinks one side
-	    into the other part. When a third part hides one side (two markings
-	    as thick as each other, their bottoms on the road), it nudges toward
-	    that side: that side sinks into the part hiding it, and the other
-	    ends just behind the other part's face, so no gap opens under it.
-	    When both sides are visible (a window exactly as thick as its wall)
-	    it grows by the gap on each side instead.
+	  * Flat faces: the mover is nudged outward. When a third part hides
+	    its other side on that axis (two layer-0 items as thick as each
+	    other, their bottoms on the road), it's nudged toward that side
+	    instead: it sinks into the part hiding it and its face ends just
+	    behind the other's, so no gap of light opens under it. Not when its
+	    far face would end within zFightTolerance (plus a margin) of the
+	    surface it sinks into (a marking no thicker than the nudge), or one
+	    of its faces would end flush on one of the hiding part's (a rib
+	    across a road's full width, its ends in line with the road's sides).
+	    If it z-fights on both opposite sides of one axis and can't sink, a
+	    nudge away from the hidden side clears both but sinks that side into
+	    the other part; when neither side is hidden (a window exactly as
+	    thick as its wall) it grows by the gap on each side instead.
 	  * Round surfaces: the mover's radius grows. Its CFrame stays, so joints
 	    stay valid.
 	  * A zgap keeps its order: the surface in front stays in front. A face
@@ -75,6 +85,12 @@ local MIN_NEED = 1e-6
 -- A seam's strip is at most this share of each face's width: pieces laid
 -- edge to edge each reach well past it, but an inlay is all overlap.
 local SEAM_SHARE = 0.5
+-- A mover sunk into the part hiding one side keeps its far face more than
+-- zFightTolerance plus this clear of the surface it sinks into.
+local SINK_MARGIN = 0.005
+-- Share of a contact's overlap that may stay uncovered (arithmetic rounding;
+-- Geometry.overlapCover already allows for float32 positions).
+local COVER_SLACK = 1e-6
 local NO_FACES = {}
 
 local function boxesNear(a, b, margin)
@@ -490,9 +506,61 @@ function ZFight.scan(ctx)
 		end
 	end
 
+	-- Faces of the candidates other than `i` and `j` near both `a` and `b`:
+	-- what could cover their contacts. Meshes' triangles aren't read for it.
+	local margin = Vector3.one * search
+	local function nearbyFaces(a, b, i, j)
+		local box = { min = a.min:Max(b.min) - margin, max = a.max:Min(b.max) + margin }
+		local faces = {}
+		for _, k in hash:query(box.min, box.max) do
+			local s = candidates[k]
+			if k ~= i and k ~= j and boxesNear(s, box, 0) and not isMeshLike(s) then
+				for _, f in Geometry.faces(s) do
+					table.insert(faces, f)
+				end
+			end
+		end
+		return faces
+	end
+	-- Is the whole overlap of contact `c` covered, back to back, by faces
+	-- pointing the other way in its plane (a road resting on its footing and
+	-- on the ground pad the footing passes through)? Nothing can see it.
+	local function covered(c, faces)
+		local fa, fb = c.faceA, c.faceB
+		local covers = {}
+		for _, f in faces do
+			if
+				f.normal:Dot(fa.normal) <= -PARALLEL
+				and math.abs((f.center - fa.center):Dot(fa.normal)) <= tolerance
+				and math.abs((f.center - fb.center):Dot(fa.normal)) <= tolerance
+				and boundsTouch(f, fa, tolerance)
+				and boundsTouch(f, fb, tolerance)
+			then
+				table.insert(covers, f)
+			end
+		end
+		if #covers == 0 then
+			return false
+		end
+		local area, total = Geometry.overlapCover(fa, fb, covers)
+		return total > 0 and area >= total * (1 - COVER_SLACK)
+	end
+	-- `contacts` less those covered by parts that show (round ones can't be).
+	local function uncovered(contacts, a, b, i, j)
+		local faces = nil
+		local kept = {}
+		for _, c in contacts do
+			worked()
+			faces = faces or nearbyFaces(a, b, i, j)
+			if c.round or not covered(c, faces) then
+				table.insert(kept, c)
+			end
+		end
+		return kept
+	end
+
 	local issues = {}
 	local copyOf = {}
-	local margin = Vector3.one * search
 	for i, a in candidates do
 		if i % 200 == 0 then
 			ctx.progress("zfight", i, #candidates)
@@ -520,7 +588,7 @@ function ZFight.scan(ctx)
 					table.insert(issues, Meshes.overlapIssue(ctx, a, b, ratio))
 				end
 			end
-			local contacts = faceContacts(facesA, facesB, search, minArea, indexOf, worked)
+			local contacts = uncovered(faceContacts(facesA, facesB, search, minArea, indexOf, worked), a, b, i, j)
 			local round = roundContact(a, b, tolerance, search, minArea)
 			if round then
 				table.insert(contacts, round)
@@ -571,15 +639,52 @@ local function pickMover(a, b, config)
 	return b
 end
 
--- Is the area just beyond `face` filled by some part other than `exclude`?
-local function hiddenBeyond(face, distance, world, exclude)
-	if not world then
-		return false
+-- The face of solid `s` on the `sign` side of its local `axis`, or nil.
+local function ownFace(s, axis, sign)
+	for _, f in Geometry.faces(s) do
+		if f.axis == axis and f.sign == sign then
+			return f
+		end
+	end
+	return nil
+end
+
+-- The part other than `exclude` filling the area just beyond `face`, or
+-- nil. Parts that don't show (zFightIgnoreTransparency) hide nothing.
+local function partBeyond(face, distance, world, exclude, config)
+	if not world or not face then
+		return nil
 	end
 	local probe = face.center + face.normal * distance
 	return world.partAt(probe, function(instance)
-		return exclude[instance] == true
-	end) ~= nil
+		return exclude[instance] == true or instance.Transparency >= config.zFightIgnoreTransparency
+	end)
+end
+
+-- Can mover `s` shift `by` along its local `axis` into `hider`, the part
+-- hiding that side? Not when its far face would end within zFightTolerance
+-- (plus SINK_MARGIN) of the surface it sinks into, nor when any face of it
+-- would end flush on a face of the hider, overlapping it (a rib across a
+-- road's full width: its ends in line with the road's sides).
+local function canSink(s, axis, by, hider, config)
+	local tolerance = config.zFightTolerance
+	if Geometry.component(s.size, axis) - math.abs(by) <= tolerance + SINK_MARGIN then
+		return false
+	end
+	local offset = s.axes[axis] * by
+	local hiderFaces = Geometry.faces(Geometry.solid(hider))
+	for _, f in Geometry.faces(s) do
+		local moved = { normal = f.normal, center = f.center + offset, points = table.create(#f.points) }
+		for i, p in f.points do
+			moved.points[i] = p + offset
+		end
+		for _, h in hiderFaces do
+			if Geometry.coplanarOverlap(moved, h, tolerance, config.zFightMinOverlapArea) then
+				return false
+			end
+		end
+	end
+	return true
 end
 
 -- Records that the mover must move `need` along `normal`. Many contacts can
@@ -625,6 +730,10 @@ local function newRequest(mover)
 		neg = { 0, 0, 0 },
 		posFace = {},
 		negFace = {},
+		-- How far the mover must go the other way (into the part) to put
+		-- that side's face behind the other's instead.
+		posBack = { 0, 0, 0 },
+		negBack = { 0, 0, 0 },
 		moves = {},
 		roundGrow = 0,
 		roundShrink = 0,
@@ -687,10 +796,14 @@ local function addContacts(request, entry, tolerance, item)
 			elseif gap - ahead > MIN_NEED then
 				local need = gap - ahead
 				if moverFace.axis then
+					local axis = moverFace.axis
 					local side = if moverFace.sign > 0 then request.pos else request.neg
 					local faces = if moverFace.sign > 0 then request.posFace else request.negFace
-					side[moverFace.axis] = math.max(side[moverFace.axis], need)
-					faces[moverFace.axis] = moverFace
+					local back = if moverFace.sign > 0 then request.posBack else request.negBack
+					side[axis] = math.max(side[axis], need)
+					faces[axis] = moverFace
+					-- A zgap's face stays in front: never sunk behind.
+					back[axis] = math.max(back[axis], if keepOrder then math.huge else gap + ahead)
 				else
 					addMove(request.moves, moverFace.normal, need)
 				end
@@ -701,32 +814,40 @@ end
 
 -- The planned CFrame and Size for one mover, and what was done; nil when
 -- no move clears every face.
-local function resolveRequest(request, world)
+local function resolveRequest(request, world, config)
 	local s = request.solid
 	local shift, grow = { 0, 0, 0 }, { 0, 0, 0 }
 	local moves = table.clone(request.moves)
 	local grew = false
+	local probe = request.gap + 0.01
 	for axis = 1, 3 do
 		local p, n = request.pos[axis], request.neg[axis]
-		if p > 0 and n > 0 then
-			-- Toward a side a third part hides: lifting that side off it
-			-- would open a gap of light there.
-			local probe = request.gap + 0.01
-			local posHidden = hiddenBeyond(request.posFace[axis], probe, world, request.exclude)
-			local negHidden = hiddenBeyond(request.negFace[axis], probe, world, request.exclude)
-			if negHidden and not posHidden then
-				shift[axis] = -n
-			elseif posHidden and not negHidden then
-				shift[axis] = p
+		if p > 0 or n > 0 then
+			-- Toward a side a third part hides (a layer-0 item's bottom on the
+			-- road): moving that side off it would open a gap of light there.
+			-- Only as far as it can sink (canSink); else the other way.
+			local posHider = partBeyond(request.posFace[axis] or ownFace(s, axis, 1), probe, world, request.exclude, config)
+			local negHider = partBeyond(request.negFace[axis] or ownFace(s, axis, -1), probe, world, request.exclude, config)
+			local down, up = math.max(n, request.posBack[axis]), math.max(p, request.negBack[axis])
+			if negHider and not posHider and canSink(s, axis, -down, negHider, config) then
+				shift[axis] = -down
+			elseif posHider and not negHider and canSink(s, axis, up, posHider, config) then
+				shift[axis] = up
+			elseif p > 0 and n > 0 then
+				if negHider and not posHider then
+					shift[axis] = p
+				elseif posHider and not negHider then
+					shift[axis] = -n
+				else
+					grow[axis] = p + n
+					shift[axis] = (p - n) / 2
+					grew = true
+				end
+			elseif p > 0 then
+				addMove(moves, s.axes[axis], p)
 			else
-				grow[axis] = p + n
-				shift[axis] = (p - n) / 2
-				grew = true
+				addMove(moves, -s.axes[axis], n)
 			end
-		elseif p > 0 then
-			addMove(moves, s.axes[axis], p)
-		elseif n > 0 then
-			addMove(moves, -s.axes[axis], n)
 		end
 	end
 	local move = solveMoves(moves, s.cf:VectorToWorldSpace(Vector3.new(shift[1], shift[2], shift[3])))
@@ -797,7 +918,7 @@ function ZFight.plan(issues, config, plan, world)
 		for _, entry in request.entries do
 			addContacts(request, entry, config.zFightTolerance, plan.byPart[entry.other.part])
 		end
-		local toCFrame, toSize, action = resolveRequest(request, world)
+		local toCFrame, toSize, action = resolveRequest(request, world, config)
 		if not toCFrame then
 			for _, issue in request.issues do
 				table.insert(unfixable, issue)

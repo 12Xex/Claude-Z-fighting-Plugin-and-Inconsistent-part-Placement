@@ -28,7 +28,9 @@
 
 	Controls added here: a wider sleeve, a corner wedge resting on a block,
 	the same 0.02 gap seen up close, wedge facets laid exactly edge to edge,
-	a washboard rib flush on a deck at layer 0, a StreetLamp, two RoadSigns
+	a washboard rib flush on a deck at layer 0, a road resting on a ground
+	pad with a footing through the pad (the footing's top is flush with the
+	pad's, all under the road), a StreetLamp, two RoadSigns
 	and a RoofRail by the road, a Highway_Exit sign on a post, a RoadSign
 	placed on a board with Layers, a StreetLight head on a pole, a layered
 	RoadLine on the road, an ignored (tagged) crate on the main road, the P33
@@ -149,6 +151,24 @@ function TestCases.faces(b, origin)
 	local deck = b.part("RibDeck", Vector3.new(12, 1, 8), o * CFrame.new(104, 0.5, 14), Color3.fromRGB(170, 170, 160), Enum.Material.Concrete)
 	local rib = b.part("Washboard_Rib", Vector3.new(8, 0.22, 0.6), CFrame.new(), Color3.fromRGB(120, 105, 90))
 	b.control(Layers.place(rib, deck, { layer = 0, rotation = 90, config = b.config }))
+
+	-- Control: a road resting on a flat ground pad with the docs' footing
+	-- under it (as wide and long as the road, its top at the road's bottom)
+	-- reaching through the pad into the ground. Where it passes through,
+	-- the footing's top is flush with the pad's, but the road's bottom
+	-- covers all of that: hidden, not a z-fight. Beside the Tub, the pad 2
+	-- studs wider than the road on every side.
+	local length = b.W + 4 -- a piece on its own is measured across its shorter side
+	local thick = math.clamp(b.config.maxLedge - b.config.roadLift - 0.1, 0.2, 1) -- as the scene's roads
+	local padTop = 1
+	local bottom = padTop + Ground.effectiveLift(b.config.roadLift, thick)
+	local padSize = Vector3.new(b.W + 4, padTop, length + 4)
+	local padAt = o * CFrame.new(-6 - padSize.X / 2, 0, 0)
+	b.control(b.part("Ground_Yard", padSize, padAt * CFrame.new(0, padTop / 2, 0), GRASS, Enum.Material.Grass))
+	b.control(b.part("Road_OnPad", Vector3.new(b.W, thick, length), padAt * CFrame.new(0, bottom + thick / 2, 0), ASPHALT, Enum.Material.Asphalt))
+	local depth = bottom + 1
+	local DIRT = Color3.fromRGB(110, 90, 70)
+	b.control(b.part("Footing_Road_OnPad", Vector3.new(b.W, depth, length), padAt * CFrame.new(0, bottom - depth / 2, 0), DIRT, Enum.Material.Ground))
 	return { far = far, tubs = tubs, land = land }
 end
 

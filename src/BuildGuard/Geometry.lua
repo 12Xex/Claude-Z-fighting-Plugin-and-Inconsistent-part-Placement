@@ -373,6 +373,19 @@ local MIN_OVERLAP_WIDTH = 1e-3
 -- Part positions are float32: about 4 rounding steps of a coordinate this big.
 local FLOAT_STEPS = 4 * 2 ^ -23
 
+-- How far apart float rounding can put two edges meant to meet near `c`.
+local function floatSliver(c)
+	return math.max(MIN_OVERLAP_WIDTH, FLOAT_STEPS * math.max(math.abs(c.X), math.abs(c.Y), math.abs(c.Z)))
+end
+
+-- Faces `fa` and `fb` projected on fa's plane (fa.center is the origin of
+-- u, v) and their overlap there: overlap, pa, pb, u, v.
+local function overlapOnPlane(fa, fb)
+	local u, v = planeBasis(fa.normal)
+	local pa, pb = project(fa.points, fa.center, u, v), project(fb.points, fa.center, u, v)
+	return Geometry.clipPolygon(pb, pa), pa, pb, u, v
+end
+
 -- If faces `fa` and `fb` point the same way, lie within `tolerance` of each
 -- other and overlap, returns (overlapArea, distance, centroid, width) where
 -- distance is how far fb's plane sits in front of fa's along fa's normal,
@@ -389,9 +402,7 @@ function Geometry.coplanarOverlap(fa, fb, tolerance, minArea)
 	if math.abs(distance) > tolerance then
 		return nil
 	end
-	local u, v = planeBasis(fa.normal)
-	local pa, pb = project(fa.points, fa.center, u, v), project(fb.points, fa.center, u, v)
-	local clipped = Geometry.clipPolygon(pb, pa)
+	local clipped, pa, pb, u, v = overlapOnPlane(fa, fb)
 	if #clipped < 3 then
 		return nil
 	end
@@ -399,13 +410,69 @@ function Geometry.coplanarOverlap(fa, fb, tolerance, minArea)
 	if area < minArea then
 		return nil
 	end
-	local c = fa.center
-	local thin = math.max(MIN_OVERLAP_WIDTH, FLOAT_STEPS * math.max(math.abs(c.X), math.abs(c.Y), math.abs(c.Z)))
-	if Geometry.polygonSeparation(pa, pb) > -thin then
+	if Geometry.polygonSeparation(pa, pb) > -floatSliver(fa.center) then
 		return nil
 	end
 	local cx, cy = polygonCentroid(clipped)
 	return area, distance, fa.center + u * cx + v * cy, Geometry.polygonWidth(clipped)
+end
+
+-- A convex polygon grown by `d`: each edge moved out by d. Corners sharper
+-- than about 30° are cut off rather than drawn out to a long point.
+local function grownPolygon(poly, d)
+	poly = counterClockwise(poly)
+	-- Each edge's start and outward normal, skipping repeated points.
+	local starts, normals = {}, {}
+	for i = 1, #poly do
+		local a, b = poly[i], poly[i % #poly + 1]
+		local dx, dy = b[1] - a[1], b[2] - a[2]
+		local length = math.sqrt(dx * dx + dy * dy)
+		if length > 1e-9 then
+			table.insert(starts, a)
+			table.insert(normals, { dy / length, -dx / length })
+		end
+	end
+	if #starts < 3 then
+		return poly
+	end
+	local out = {}
+	for i, p in starts do
+		local n0, n1 = normals[(i - 2) % #normals + 1], normals[i]
+		local k = 1 + n0[1] * n1[1] + n0[2] * n1[2]
+		if k >= 1 / 8 then
+			table.insert(out, { p[1] + d * (n0[1] + n1[1]) / k, p[2] + d * (n0[2] + n1[2]) / k })
+		else
+			table.insert(out, { p[1] + d * n0[1], p[2] + d * n0[2] })
+			table.insert(out, { p[1] + d * n1[1], p[2] + d * n1[2] })
+		end
+	end
+	return out
+end
+
+-- How much of the overlap of same-facing faces `fa` and `fb` (as
+-- coplanarOverlap finds it) the faces `covers` hide: faces pointing the
+-- other way that lie on it, back to back (a road resting on both). Each
+-- cover is grown by the float rounding coplanarOverlap ignores, so one built
+-- flush with the overlap's edges covers all of it, far from the origin too.
+-- Covers that overlap each other count twice; the sum is capped at the
+-- overlap. Returns coveredArea, overlapArea (0, 0 without an overlap).
+function Geometry.overlapCover(fa, fb, covers)
+	local overlap, _, _, u, v = overlapOnPlane(fa, fb)
+	if #overlap < 3 then
+		return 0, 0
+	end
+	local area = Geometry.polygonArea(overlap)
+	local grow = floatSliver(fa.center)
+	local covered = 0
+	for _, f in covers do
+		-- A face pointing the other way winds the other way round once
+		-- projected on fa's plane; grownPolygon turns it counter-clockwise.
+		local inside = Geometry.clipPolygon(overlap, grownPolygon(project(f.points, fa.center, u, v), grow))
+		if #inside >= 3 then
+			covered += Geometry.polygonArea(inside)
+		end
+	end
+	return math.min(covered, area), area
 end
 
 --------------------------------------------------------------------------------
