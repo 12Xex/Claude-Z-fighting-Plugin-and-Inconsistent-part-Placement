@@ -21,6 +21,17 @@
 	Off-ground messages name the part by its path from the scan root; the
 	issue's position is the part's bottom centre.
 
+	Gaps (warning, no fix): a straight part can rest on the highest ground
+	under it and still hang over dips. For a part that's on the ground (not
+	off it, not buried), the same rays measure the gap between its resting
+	face and the ground below at the samples within max(2, sampleSpacing)
+	studs of that face's edges, where a gap shows. The biggest one is
+	reported when it's over maxHover plus its kind's lift (if positive: a
+	rail's room for sleepers isn't a gap). A footing under the part is
+	ground like anything else starting below it, so it closes the gap. A
+	drop deeper than connectMaxStep is a span (a bridge, an overpass), not
+	a gap.
+
 	Tilted parts (ramps, slopes) are skipped: a ramp is meant to leave the
 	ground. A block lying upside down rests on its Top face (a box looks the
 	same either way up), and a wedge on its flat bottom.
@@ -32,7 +43,9 @@
 
 local Geometry = require(script.Parent.Parent.Geometry)
 local Classify = require(script.Parent.Parent.Classify)
+local Config = require(script.Parent.Parent.Config)
 local Plan = require(script.Parent.Parent.Plan)
+local Util = require(script.Parent.Parent.Util)
 
 local Ground = {}
 
@@ -182,7 +195,9 @@ local function openAirAbove(start, ctx, ignore, maxUp)
 end
 
 -- Works out how far `s` must move vertically to sit on the ground.
--- Returns { delta = number } or { skip = reason }.
+-- Returns { delta = number, samples, groundY } or { skip = reason }:
+-- `samples` are the points on the face it rests on, and groundY[i] the
+-- height of the ground found under samples[i] (nil where none was found).
 function Ground.measure(s, ctx)
 	local config = ctx.configFor(s.part)
 	local tilt = Geometry.tiltDegrees(s)
@@ -203,7 +218,9 @@ function Ground.measure(s, ctx)
 	end
 	local topY = s.max.Y + 0.05
 	local best, hits, buried = -math.huge, 0, 0
-	for _, p in Geometry.faceSamples(s, restsOn, 0.05, 0.25, config.sampleSpacing) do
+	local samples = Geometry.faceSamples(s, restsOn, 0.05, 0.25, config.sampleSpacing)
+	local groundY = {}
+	for i, p in samples do
 		local start = openAirAbove(Vector3.new(p.X, topY, p.Z), ctx, ignore, config.snapSearchUp)
 		local hit
 		if start then
@@ -213,6 +230,7 @@ function Ground.measure(s, ctx)
 		end
 		if hit then
 			hits += 1
+			groundY[i] = hit.position.Y
 			best = math.max(best, hit.position.Y + liftOver(hit.instance) - p.Y)
 		end
 	end
@@ -222,7 +240,34 @@ function Ground.measure(s, ctx)
 		end
 		return { skip = "no ground below" }
 	end
-	return { delta = best }
+	return { delta = best, samples = samples, groundY = groundY }
+end
+
+-- The biggest gap between `s`'s resting face and the ground under it where
+-- it shows: at the samples within max(2, sampleSpacing) studs of the face's
+-- edges, from a measure `m`. Returns { gap, position, edge } (edges named
+-- by the part's own axes), or nil when no such sample found ground. A sunk
+-- part's gaps are negative. A drop deeper than connectMaxStep is a span (a
+-- bridge, an overpass), not a gap.
+function Ground.edgeGap(s, m, config)
+	local band = math.max(2, config.sampleSpacing) + 1e-3
+	local h = s.half
+	local worst = nil
+	for i, p in m.samples or {} do
+		local y = m.groundY[i]
+		if y then
+			local lp = s.cf:PointToObjectSpace(p)
+			local dx, dz = h.X - math.abs(lp.X), h.Z - math.abs(lp.Z)
+			local gap = p.Y - y
+			if math.min(dx, dz) <= band and gap <= config.connectMaxStep and (not worst or gap > worst.gap) then
+				local edge = if dx <= dz
+					then (if lp.X > 0 then "+X" else "-X")
+					else (if lp.Z > 0 then "+Z" else "-Z")
+				worst = { gap = gap, position = p, edge = edge }
+			end
+		end
+	end
+	return worst
 end
 
 -- Locked parts (Locked, BuildGuardLocked) are never moved by a snap.
@@ -260,9 +305,8 @@ function Ground.planSnap(solids, ctx, plan)
 	return skipped
 end
 
--- Off-ground issue for one road/rail/track, or nil.
-local function offGroundIssue(s, kind, ctx)
-	local m = Ground.measure(s, ctx)
+-- Off-ground issue for one road/rail/track measured as `m`, or nil.
+local function offGroundIssue(s, kind, ctx, m)
 	local bottom = s.cf:PointToWorldSpace(Vector3.new(0, -upSign(s) * s.half.Y, 0))
 	if m.delta and math.abs(m.delta) > ctx.configFor(s.part).groundTolerance then
 		local what = if m.delta < 0
@@ -290,13 +334,50 @@ local function offGroundIssue(s, kind, ctx)
 	return nil
 end
 
--- Roads/rails/tracks that are hovering above or sunk below the ground.
+-- Gap issue for a road/rail/track that rests on the ground (measured as
+-- `m`) but hangs over a dip at its edges, or nil. Its kind's lift (a rail's
+-- room for sleepers) isn't a gap.
+local function gapIssue(s, kind, ctx, m)
+	local config, sources = ctx.configFor(s.part)
+	local worst = Ground.edgeGap(s, m, config)
+	local key = LIFT_KEY[kind]
+	local lift = math.max(config[key], 0)
+	if not worst or worst.gap <= config.maxHover + lift + 1e-3 then
+		return nil
+	end
+	local fix = if Config.schema[key].min < 0
+		then ("sink it into the ground (negative %s), put a footing under it, or raise the ground there"):format(key)
+		else "put a footing under it or raise the ground there"
+	return {
+		check = "gap",
+		severity = "warning",
+		parts = { s.part },
+		position = worst.position,
+		value = worst.gap,
+		edge = worst.edge,
+		message = ("%s %s has a %.2f-stud gap under its %s edge at %s (limit %.2f%s%s): %s"):format(
+			kind,
+			ctx.path(s.part),
+			worst.gap,
+			worst.edge,
+			Util.vector(worst.position),
+			config.maxHover,
+			if lift > 0 then (" + %s %.2f"):format(key, lift) else "",
+			if sources.maxHover then ", set on " .. ctx.path(sources.maxHover) else "",
+			fix
+		),
+	}
+end
+
+-- Roads/rails/tracks that are hovering above or sunk below the ground, or
+-- that rest on it with a gap under their edges.
 function Ground.scan(ctx, alreadyFlagged)
 	local issues = {}
 	for _, s in ctx.solids do
 		local kind = ctx.kindOf(s.part)
 		if kind and not alreadyFlagged[s.part] then
-			local issue = offGroundIssue(s, kind, ctx)
+			local m = Ground.measure(s, ctx)
+			local issue = offGroundIssue(s, kind, ctx, m) or (m.delta and gapIssue(s, kind, ctx, m))
 			if issue then
 				table.insert(issues, issue)
 			end

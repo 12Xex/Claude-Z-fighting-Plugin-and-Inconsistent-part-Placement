@@ -706,3 +706,305 @@ test("an upside-down road is checked on the face that's up", function()
 	near(lp.Z, W / 2, 1e-3, "on the part's own +Z edge")
 	near(lp.Y, -0.75, 1e-3, "on the face that's up")
 end)
+
+T.section("Roads: gaps under the edges")
+
+-- Two ground pads `hang` high with a dip `dip` wide between them, and a part
+-- of `size` centred over the dip, its bottom `lift` above the pads.
+local function overDip(part, name, size, hang, dip, lift, parent)
+	for _, side in { -1, 1 } do
+		part("Ground_Pad", Vector3.new(8, hang, W + 4), CFrame.new(side * (dip / 2 + 4), hang / 2, 0), parent)
+	end
+	return part(name, size, CFrame.new(0, hang + (lift or 0) + size.Y / 2, 0), parent)
+end
+
+local function gapsOf(report, part)
+	local out = {}
+	for _, issue in checks(report, "gap") do
+		if issue.parts[1] == part then
+			table.insert(out, issue)
+		end
+	end
+	return out
+end
+
+test("gap: a road resting on two raised pads is flagged where its edges hang over the dip between them", function()
+	local root, world, part = setup()
+	local road = overDip(part, "Road_West_2", Vector3.new(24, 0.8, W), 1.21, 12)
+	local report = BG.scan(root, { world = world })
+	local gaps = checks(report, "gap")
+	expect(#gaps == 1 and gaps[1].parts[1] == road, BG.format(report))
+	local g = gaps[1]
+	near(g.value, 1.21, 1e-3, "gap")
+	expect(g.edge == "-Z" or g.edge == "+Z", tostring(g.edge))
+	expect(g.severity == "warning" and not BG.isFixable(g), "a warning with no fix")
+	near(g.position.Y, 1.21, 1e-3, "on the face it rests on")
+	expect(math.abs(g.position.X) < 6, "over the dip")
+	near(math.abs(g.position.Z), W / 2, 0.3, "at the edge")
+	local wanted = ("Road Workspace/Road_West_2 has a 1.21-stud gap under its %s edge at %s (limit %.2f): sink it into the ground (negative roadLift), put a footing under it, or raise the ground there"):format(
+		g.edge,
+		Util.vector(g.position),
+		D.maxHover
+	)
+	expect(g.message == wanted, g.message .. "\n" .. wanted)
+	expect(#checks(report, "offground") == 0, "it rests on the pads")
+	expect(has(BG.format(report), "[WARNING] gap"), BG.format(report))
+
+	-- Upside down it rests on its Top face, and is measured from that.
+	local root2, world2, part2 = setup()
+	local flipped = overDip(part2, "Road_Flipped", Vector3.new(24, 0.8, W), 1.21, 12)
+	flipped.CFrame *= CFrame.Angles(math.pi, 0, 0)
+	local flippedGaps = checks(BG.scan(root2, { world = world2 }), "gap")
+	expect(#flippedGaps == 1, "flipped road over the dip")
+	near(flippedGaps[1].value, 1.21, 1e-3, "gap under the flipped road")
+end)
+
+test("gap: a footing (any part starting below the road's bottom) or terrain in the dip closes the gap", function()
+	local root, world, part = setup()
+	local road = overDip(part, "Road_1", Vector3.new(24, 0.8, W), 1.21, 12)
+	part("Footing", Vector3.new(12, 1.21, W), CFrame.new(0, 1.21 / 2, 0))
+	local report = BG.scan(root, { world = world })
+	expect(#gapsOf(report, road) == 0, BG.format(report))
+
+	local root2, world2, part2 = setup()
+	local road2 = overDip(part2, "Road_1", Vector3.new(24, 0.8, W), 1.21, 12)
+	world2.fillTerrain(CFrame.new(0, 1.21 / 2, 0), Vector3.new(12, 1.21, W + 4))
+	report = BG.scan(root2, { world = world2 })
+	expect(#gapsOf(report, road2) == 0, BG.format(report))
+end)
+
+test("gap: another road, an ignored part or a marking in the dip isn't ground under the road", function()
+	for _, case in { "road", "ignored", "layered" } do
+		local root, world, part = setup()
+		local road = overDip(part, "Road_1", Vector3.new(24, 0.8, W), 1.21, 12)
+		local filler = part(if case == "road" then "Road_Below" else "Filler", Vector3.new(12, 1, W), CFrame.new(0, 0.5, 0))
+		if case == "ignored" then
+			filler:SetAttribute("BuildGuardIgnore", true)
+		elseif case == "layered" then
+			filler:SetAttribute("BuildGuardLayer", 1)
+		end
+		local report = BG.scan(root, { world = world })
+		local gaps = gapsOf(report, road)
+		expect(#gaps == 1, case .. ": " .. BG.format(report))
+		near(gaps[1].value, 1.21, 1e-3, case .. ": measured from the ground below it")
+	end
+end)
+
+test("gap: only the edges count; how far in grows with sampleSpacing", function()
+	local root, world, part = setup()
+	local hang = 1.21
+	-- Ground strips 4 wide under every edge, a hollow under the middle.
+	local road = part("Road_1", Vector3.new(32, 0.8, W), CFrame.new(0, hang + 0.4, 0))
+	for _, side in { -1, 1 } do
+		part("Ground_Side", Vector3.new(32, hang, 4), CFrame.new(0, hang / 2, side * (W / 2 - 2)))
+		part("Ground_End", Vector3.new(4, hang, W - 8), CFrame.new(side * 14, hang / 2, 0))
+	end
+	local report = BG.scan(root, { world = world })
+	expect(#gapsOf(report, road) == 0 and #checks(report, "offground") == 0, BG.format(report))
+	local wide = BG.scan(root, { world = world, config = { sampleSpacing = 6 } })
+	local gaps = gapsOf(wide, road)
+	expect(#gaps == 1, "6 studs in from the edges, the hollow counts:\n" .. BG.format(wide))
+	near(gaps[1].value, hang, 1e-3, "gap over the hollow")
+end)
+
+test("gap: within maxHover passes; maxHover is set per model and the message says where", function()
+	local root, world, part = setup()
+	local hills = Instance.new("Model")
+	hills.Name = "Hills"
+	hills.Parent = root
+	local road = overDip(part, "Road_1", Vector3.new(24, 0.8, W), D.maxHover - 0.05, 12, 0, hills)
+	local report = BG.scan(root, { world = world })
+	expect(#gapsOf(report, road) == 0, BG.format(report))
+	BG.setConfig(hills, { maxHover = 0.1 }, "flat valley")
+	local gaps = gapsOf(BG.scan(root, { world = world }), road)
+	expect(#gaps == 1, "over the model's 0.1")
+	expect(has(gaps[1].message, "(limit 0.10, set on Workspace/Hills)"), gaps[1].message)
+	expect(not pcall(BG.setConfig, hills, { maxHover = 11 }, "x"), "maxHover is 0 to 10")
+	expect(not pcall(BG.setConfig, hills, { maxHover = -1 }, "x"), "maxHover is 0 to 10")
+	expect(BG.Config.check("maxHover", 0) and BG.Config.check("maxHover", 10), "0 and 10 allowed")
+end)
+
+test("gap: sunk roads, ramps, bridge spans and roads reported buried or off the ground get no gap warning", function()
+	-- Sunk into flat ground with a negative roadLift: every gap is negative.
+	local root, world, part = setup()
+	root:SetAttribute("BuildGuard_roadLift", -0.3)
+	root:SetAttribute("BuildGuardConfigReason", "roads sit into the terrain")
+	part("Road_Sunk", Vector3.new(30, 0.8, W), CFrame.new(0, 0.4 - 0.3, 0))
+	-- A 10° ramp resting on its foot: its high end is meant to leave the ground.
+	part("Road_Ramp", Vector3.new(16, 0.8, W), CFrame.new(60, 0.8, 0) * CFrame.Angles(0, 0, math.rad(10)) * CFrame.new(8, -0.4, 0))
+	local report = BG.scan(root, { world = world })
+	expect(#checks(report, "gap") == 0 and #checks(report, "offground") == 0, BG.format(report))
+
+	-- An overpass deck on piers: the drop under it is deeper than connectMaxStep.
+	local root2, world2, part2 = setup()
+	local thin = D.maxLedge - D.roadLift - 0.1
+	local bottom = D.roadLift + thin + D.connectMaxStep
+	part2("Road_Under", Vector3.new(30, thin, W), CFrame.new(0, D.roadLift + thin / 2, 0))
+	for _, side in { -1, 1 } do
+		part2("Pier", Vector3.new(W, bottom, 2), CFrame.new(0, bottom / 2, side * (W / 2 + 2)))
+	end
+	part2("Road_Overpass", Vector3.new(W, 0.8, W + 8), CFrame.new(0, bottom + 0.4, 0))
+	report = BG.scan(root2, { world = world2 })
+	expect(#checks(report, "gap") == 0, BG.format(report))
+
+	-- Hovering (off the ground) or buried under a crate, over a dip: one issue each.
+	local root3, world3, part3 = setup()
+	local hover = overDip(part3, "Road_Hover", Vector3.new(24, 0.8, W), 1.21, 12, 2)
+	report = BG.scan(root3, { world = world3 })
+	expect(#checks(report, "offground") == 1 and #gapsOf(report, hover) == 0, BG.format(report))
+	local root4, world4, part4 = setup()
+	local covered = overDip(part4, "Road_Covered", Vector3.new(24, 0.8, W), 1.21, 12)
+	part4("Crate", Vector3.new(4, 4, 4), CFrame.new(0, 1.21 + 0.8 + 2, 0))
+	report = BG.scan(root4, { world = world4 })
+	expect(#checks(report, "buried") == 1 and #gapsOf(report, covered) == 0, BG.format(report))
+end)
+
+test("gap: a rail sits its railLift above the ground: that's no gap, and rails aren't told to sink", function()
+	local root, world, part = setup()
+	part("Rail_1", Vector3.new(20, 0.5, 1), CFrame.new(0, D.railLift + 0.25, 0))
+	local report = BG.scan(root, { world = world, config = { maxHover = 0.1 } })
+	expect(#checks(report, "gap") == 0 and #report.issues == 0, BG.format(report))
+	local root2, world2, part2 = setup()
+	local rail = overDip(part2, "Rail_2", Vector3.new(20, 0.5, 1), 1, 12, D.railLift)
+	local gaps = gapsOf(BG.scan(root2, { world = world2, config = { maxHover = 0.1 } }), rail)
+	expect(#gaps == 1, "over the dip")
+	near(gaps[1].value, 1 + D.railLift, 1e-3, "measured from the ground")
+	local message = gaps[1].message
+	expect(has(message, ("(limit 0.10 + railLift %.2f): put a footing under it or raise the ground there"):format(D.railLift)), message)
+	expect(not has(message, "negative"), message)
+end)
+
+test("gap: the edge step is still checked on a road with a gap under it", function()
+	local root, world, part = setup()
+	local road = overDip(part, "Road_1", Vector3.new(24, 0.8, W), 1.21, 12)
+	local report = BG.scan(root, { world = world })
+	expect(#gapsOf(report, road) == 1, BG.format(report))
+	local edges = edgesOf(report, road)
+	expect(edges["+Z"] and edges["-Z"], "the drop beside it is a step too:\n" .. BG.format(report))
+end)
+
+T.section("Roads: road-like slabs that aren't checked as roads")
+
+local function slab(part, name, size, material, cf, parent)
+	local p = part(name, size, cf or CFrame.new(0, size.Y / 2, 0), parent)
+	p.Material = Enum.Material[material]
+	return p
+end
+
+test("unclassified: flat road-like slabs no check treats as roads are listed, with one NOTE line", function()
+	local root, world, part = setup()
+	local yard = slab(part, "Lookout_Yard", Vector3.new(30, 1, 30), "Asphalt", CFrame.new(0, 0.5, 0))
+	local shoulder = slab(part, "Shoulder", Vector3.new(40, 0.5, 6), "Pebble", CFrame.new(0, 0.25, 40))
+	-- Upside down, and a wedge whose slope is the top: still slabs.
+	local flipped = slab(part, "Lane", Vector3.new(30, 1, 8), "Concrete", CFrame.new(60, 0.5, 0) * CFrame.Angles(math.pi, 0, 0))
+	local ramp = Instance.new("WedgePart")
+	ramp.Name, ramp.Size, ramp.Anchored, ramp.Material = "Ramp", Vector3.new(W, 2, 16), true, Enum.Material.Asphalt
+	ramp.CFrame = CFrame.new(60, 1, 60)
+	ramp.Parent = root
+	local report = BG.scan(root, { world = world })
+	local listed = report.unclassified
+	expect(#listed == 4, BG.format(report))
+	for _, p in { yard, shoulder, flipped, ramp } do
+		expect(table.find(listed, p), p.Name .. " not listed")
+	end
+	local text = BG.format(report)
+	local wanted = "  [NOTE] 4 flat slab(s) look like road surfaces (Asphalt, Concrete, Pebble) but aren't checked as roads: Workspace/Lookout_Yard, Workspace/Shoulder, Workspace/Lane, Workspace/Ramp — name or tag them Road/Rail/Track (or set BuildGuardKind), or set BuildGuardKind = \"None\" on them or their folder if they aren't roads"
+	expect(has(text, wanted), text .. "\n" .. wanted)
+	expect(#report.issues == 0, "a note, not an issue")
+	-- Named as a road, it's checked and drops off the list.
+	yard.Name = "Road_Yard"
+	expect(not table.find(BG.scan(root, { world = world }).unclassified, yard), "a road now")
+end)
+
+test("unclassified: a long list names the first 10 and gives the count", function()
+	local root, world, part = setup()
+	local roads = Instance.new("Folder")
+	roads.Name = "Roads"
+	roads.Parent = root
+	for i = 1, 12 do
+		slab(part, "Shoulder", Vector3.new(20, 0.5, 6), "Pebble", CFrame.new(0, 0.25, i * 10), roads)
+	end
+	local report = BG.scan(root, { world = world })
+	expect(#report.unclassified == 12, BG.format(report))
+	local text = BG.format(report)
+	expect(has(text, "  [NOTE] 12 flat slab(s) look like road surfaces (Pebble) but aren't checked as roads: Workspace/Roads/Shoulder#1, Workspace/Roads/Shoulder#2,"), text)
+	expect(has(text, "Workspace/Roads/Shoulder#10 (first 10) — name or tag them"), text)
+	expect(not has(text, "Shoulder#11"), text)
+	expect(select(2, string.gsub(text, "%[NOTE%]", "")) == 1, "one line")
+end)
+
+test("unclassified: roads, ground, markings, ignored, None-marked, narrow, steep, round, standing, footings, other materials and vehicle parts aren't listed", function()
+	local root, world, part = setup()
+	local road = slab(part, "Road_1", Vector3.new(30, 0.8, W), "Asphalt", CFrame.new(0, 0.4, 0))
+	BG.Layers.place(slab(part, "Crossing", Vector3.new(6, 0.1, 6), "Asphalt", CFrame.new()), road, { layer = 1 })
+	slab(part, "Baseplate", Vector3.new(40, 1, 40), "Concrete", CFrame.new(100, 0.5, 0))
+	local floor = Instance.new("Folder")
+	floor.Name = "Floor"
+	floor:AddTag("BuildGuardGround")
+	floor.Parent = root
+	slab(part, "Tile", Vector3.new(20, 1, 20), "Slate", CFrame.new(100, 0.5, 60), floor)
+	slab(part, "Label", Vector3.new(20, 1, 20), "Asphalt", CFrame.new(100, 0.5, 120)):SetAttribute("BuildGuardIgnore", true)
+	slab(part, "Pad", Vector3.new(20, 1, 20), "Asphalt", CFrame.new(-100, 0.5, 0)):SetAttribute("BuildGuardKind", "None")
+	local pads = Instance.new("Folder")
+	pads.Name = "Pads"
+	pads:SetAttribute("BuildGuardKind", "None")
+	pads.Parent = root
+	local sub = Instance.new("Model")
+	sub.Name = "Farmyard"
+	sub.Parent = pads
+	slab(part, "Pad", Vector3.new(20, 1, 20), "Mud", CFrame.new(-100, 0.5, 60), sub)
+	slab(part, "Kerb", Vector3.new(30, 0.5, 3), "Concrete", CFrame.new(-100, 0.25, 120))
+	slab(part, "Bank", Vector3.new(20, 1, 20), "Sand", CFrame.new(0, 8, 100) * CFrame.Angles(math.rad(60), 0, 0))
+	local drum = slab(part, "Drum", Vector3.new(1, 8, 8), "Concrete", CFrame.new(-60, 4, 100))
+	drum.Shape = Enum.PartType.Cylinder
+	slab(part, "Pillar", Vector3.new(6, 8, 6), "Concrete", CFrame.new(-60, 4, -100))
+	local corner = Instance.new("CornerWedgePart")
+	corner.Name, corner.Size, corner.Anchored, corner.Material = "Corner", Vector3.new(8, 1, 8), true, Enum.Material.Asphalt
+	corner.CFrame = CFrame.new(60, 0.5, -100)
+	corner.Parent = root
+	slab(part, "Floor", Vector3.new(30, 1, 30), "WoodPlanks", CFrame.new(0, 0.5, -100))
+	-- A footing under a road and a plinth a little wider than one: they hold
+	-- roads up, nobody drives on them.
+	slab(part, "Footing", Vector3.new(30, 2, W), "Concrete", CFrame.new(0, 1, 200))
+	part("Road_2", Vector3.new(30, 0.8, W), CFrame.new(0, 2.4, 200))
+	slab(part, "Plinth", Vector3.new(21, 2, W + 2), "Concrete", CFrame.new(60, 1, 200))
+	part("Road_3", Vector3.new(20, 0.8, W), CFrame.new(60, 2.4, 200))
+	local truck = Instance.new("Model")
+	truck.Name = "Truck"
+	truck.Parent = root
+	slab(part, "Bed", Vector3.new(8, 0.5, 16), "Concrete", CFrame.new(-150, 3, 0), truck)
+	local seat = Instance.new("VehicleSeat")
+	seat.Name, seat.Size, seat.CFrame, seat.Anchored = "Seat", Vector3.new(2, 1, 2), CFrame.new(-150, 4, -5), true
+	seat.Parent = truck
+	local report = BG.scan(root, { world = world })
+	local names = {}
+	for _, p in report.unclassified do
+		table.insert(names, report.path(p))
+	end
+	expect(#report.unclassified == 0, table.concat(names, ", "))
+	expect(not has(BG.format(report), "[NOTE]"), BG.format(report))
+	-- None on a folder only silences the note: a road inside still counts.
+	local inside = slab(part, "Road_Farm", Vector3.new(30, 0.8, W), "Mud", CFrame.new(-100, 3, 60), sub)
+	expect(BG.newContext(root, { world = world }).kindOf(inside) == "Road", "still a road")
+end)
+
+test("unclassified: finding them costs no raycasts or part queries", function()
+	local root, world, part = setup()
+	for i = 1, 40 do
+		slab(part, "Pad", Vector3.new(8, 0.5, 8), "Asphalt", CFrame.new(i * 10, 0.25, 0))
+	end
+	part("Road_1", Vector3.new(30, 0.8, W), CFrame.new(0, 0.4, 60))
+	part("Footing", Vector3.new(30, 2, W), CFrame.new(0, 1, 120)).Material = Enum.Material.Concrete
+	part("Road_2", Vector3.new(30, 0.8, W), CFrame.new(0, 2.4, 120))
+	local ctx = BG.newContext(root, { world = world })
+	local calls = 0
+	for _, name in { "raycast", "partAt", "partsInBox", "isSolidTerrain", "isInsideTerrain" } do
+		local f = world[name]
+		world[name] = function(...)
+			calls += 1
+			return f(...)
+		end
+	end
+	local listed = BG.Classify.unclassified(ctx)
+	expect(#listed == 40 and calls == 0, ("%d listed, %d world queries"):format(#listed, calls))
+end)

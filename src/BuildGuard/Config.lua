@@ -82,6 +82,10 @@ Config.defaults = {
 	-- A road or rail is "off the ground" when its snap would move it more than
 	-- this far, up or down.
 	groundTolerance = 0.1,
+	-- Biggest gap allowed between a flat road/rail/track resting on the
+	-- ground and the ground under its edges (where the gap shows), on top
+	-- of its kind's lift: a straight slab over rolling land hangs over dips.
+	maxHover = 0.25,
 	-- A buried part looks this far up for open air (the surface it should sit
 	-- on). Parts in open air never look up, so tunnels are safe...
 	snapSearchUp = 20,
@@ -144,6 +148,9 @@ Config.defaults = {
 	-- Parts with an X and Z footprint at least this big also count as ground.
 	-- 0 = off (a big floor slab or roof isn't ground; tag real ground).
 	groundMinFootprint = 0,
+	-- Flat slabs of these materials that aren't roads, rails, tracks or
+	-- ground are listed in the report (they may be roads nobody named).
+	roadLikeMaterials = { "Asphalt", "Concrete", "Pavement", "Pebble", "Cobblestone", "Slate", "Ground", "Mud", "Sand" },
 }
 
 -- Per-key rules. `scope = "global"` keys can't be set by attributes: tables,
@@ -164,6 +171,7 @@ Config.schema = {
 	groundLift = { min = -2, max = 2 },
 	gridSize = { min = 0.05, max = 512 },
 	groundTolerance = { min = 0.01, max = 10 },
+	maxHover = { min = 0, max = 10 },
 	snapSearchUp = { min = 0, max = 1000 },
 	snapSearchDown = { min = 1, max = 10000 },
 	flatTiltDegrees = { min = 0, max = 45 },
@@ -187,6 +195,7 @@ Config.schema = {
 	groundNames = { scope = "global" },
 	drivableKinds = { scope = "global" },
 	groundMinFootprint = { scope = "global", min = 0, max = 1e6 },
+	roadLikeMaterials = { scope = "global" },
 }
 
 Config.ATTRIBUTE_PREFIX = "BuildGuard_"

@@ -14,12 +14,15 @@
 	  P22 Roof_Corner        zfight      fix   corner wedge side flush with a block
 	  P23 Billboard_Sign     zgap        fix   0.02 off its board in a model seen from 300 studs
 	  P26 TubTop#3           zfight      fix   one of three same-named parts (found by path)
+	  P33 Turnaround         unclassified flag Asphalt pad with no road name: listed in
+	                                           report.unclassified (a note, not an issue)
 
 	Controls added here: a wider sleeve, a corner wedge resting on a block,
 	the same 0.02 gap seen up close, a StreetLamp, two RoadSigns and a
 	RoofRail by the road, a Highway_Exit sign on a post, a RoadSign placed
 	on a board with Layers, a StreetLight head on a pole, a layered RoadLine
-	on the road, an ignored (tagged) crate on the main road.
+	on the road, an ignored (tagged) crate on the main road, the P33 pad in
+	a folder marked BuildGuardKind = "None".
 
 	(P24 and P25 were vehicle cases; vehicles are modelled in Blender now,
 	so BuildGuard doesn't check vehicle rigs.)
@@ -99,8 +102,9 @@ function TestCases.faces(b, origin)
 	return { far = far, tubs = tubs }
 end
 
--- Parts named like roads/rails that aren't, beside a road, and an ignored
--- crate dumped on a road. `road` is a road part to stand them next to.
+-- Parts named like roads/rails that aren't, beside a road, an ignored crate
+-- dumped on a road, and road-like pads with no road name. `road` is a road
+-- part to stand them next to.
 function TestCases.names(b, road)
 	local cf, half = road.CFrame, road.Size / 2
 	-- On the ground (the scene's origin height) 3 studs past the road's edge.
@@ -137,6 +141,23 @@ function TestCases.names(b, road)
 	local crate = b.part("IgnoredCrate", Vector3.new(3, 3, 3), CFrame.new(), Color3.fromRGB(160, 120, 70))
 	crate.CFrame = cf * CFrame.new(-half.X + 4, half.Y + 1.5, 0) -- clear of the stop line
 	crate:AddTag("BuildGuardIgnore")
+
+	-- P33: a turnaround pad of asphalt with no road name, on the ground
+	-- beyond the sign row: listed as a road-like slab nothing checks. The
+	-- same pad in a folder marked BuildGuardKind = "None" isn't.
+	local function pad(x, parent)
+		local p = b.part("Turnaround", Vector3.new(10, 0.4, 10), CFrame.new(), Color3.fromRGB(60, 60, 64), Enum.Material.Asphalt)
+		local spot = cf:PointToWorldSpace(Vector3.new(x, 0, half.Z + 10))
+		p.CFrame = CFrame.new(spot.X, b.base.Position.Y + 0.2, spot.Z) * cf.Rotation
+		p.Parent = parent or p.Parent
+		return p
+	end
+	b.plant(pad(-30), "P33", "unclassified", "flag", "asphalt pad with no road name")
+	local yards = Instance.new("Folder")
+	yards.Name = "Yards"
+	yards:SetAttribute("BuildGuardKind", "None")
+	yards.Parent = road.Parent
+	b.control(pad(-44, yards))
 end
 
 -- The 12 triangles of a closed box from `min` to `max` (local space),
