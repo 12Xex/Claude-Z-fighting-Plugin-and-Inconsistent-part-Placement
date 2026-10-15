@@ -645,6 +645,13 @@ for _, case in {
 	{ config = { maxSlopeChange = 30 }, place = { maxLedge = 0.8, minRoadWidth = D.minRoadWidth + 2 } },
 	-- Roads and track beds sunk into the ground place-wide.
 	{ config = {}, place = { roadLift = -0.3, trackLift = -0.2 } },
+	-- Seams off: P34 is skipped (so is a seam width too narrow for it; see
+	-- the P34 test below).
+	{ config = { zFightSeamWidth = 0 }, atDefault = true },
+	-- At 0.2 (the most allowed) the planted z-fights stay z-fights. Also run
+	-- as a call that can't wait for the new terrain: it scans anyway (the
+	-- fake world's raycasts see the terrain) and says so.
+	{ config = { zFightSeamWidth = 0.2 }, cannotYield = true },
 } do
 	local label = {}
 	for k, v in case.config do
@@ -654,13 +661,16 @@ for _, case in {
 		table.insert(label, "place-wide " .. k .. "=" .. tostring(v))
 	end
 	local name = "self-test passes with " .. (if #label > 0 then table.concat(label, ", ") else "defaults")
-	test(name .. (if case.atDefault then " at SelfTest.DEFAULT_ORIGIN" else ""), function()
+	name ..= (if case.atDefault then " at SelfTest.DEFAULT_ORIGIN" else "")
+	name ..= (if case.cannotYield then ", in a call that can't wait for new terrain" else "")
+	test(name, function()
 		local root = Instance.new("Folder")
 		root.Name = "Workspace"
 		for k, v in case.place or {} do
 			root:SetAttribute("BuildGuard_" .. k, v)
 		end
 		local world = FakeWorld.new(root, BG.Geometry)
+		world.cannotYield = case.cannotYield == true
 		-- The whole run must be one undo recording, cancelled at the end:
 		-- every other recording (and the terrain) happens inside it.
 		local calls, depth, outside = {}, 0, 0
@@ -693,6 +703,9 @@ for _, case in {
 		BG.Config.place, BG.withUndo = place, withUndo
 		expect(ok, tostring(result))
 		expect(result.passed, result.text)
+		local note = "this call couldn't wait for the new terrain to show up in raycasts, so it scanned at once: "
+			.. "if P5, P13 or P14 fail, run the self-test from the command bar or the plugin's Run self-test button"
+		expect((string.find(result.text, note, 1, true) ~= nil) == (case.cannotYield == true), result.text)
 		expect(#root:GetChildren() == 0, "scene cleaned up")
 		expect(calls[1] and calls[1].depth == 0 and calls[1].discard == true, "one outer recording, cancelled")
 		for i = 2, #calls do
@@ -791,13 +804,54 @@ test("self-test stops with a terrain row when new terrain never shows up in rayc
 	local asked = nil
 	world.waitForTerrain = function(probes, timeout)
 		asked = { probes = probes, timeout = timeout }
-		return false
+		return false, "timeout"
 	end
 	local result = BG.selfTest({ world = world, parent = root, origin = Vector3.new(4000, 0, 4000) })
 	expect(not result.passed, result.text)
 	expect(asked and #asked.probes == 2 and asked.timeout == 5, "waited on the scene's probes for 5 s")
 	expect(#result.rows == 1 and not result.rows[1].ok, result.text)
-	local wanted = "terrain    new terrain wasn't visible to raycasts after 5 s"
+	local wanted = "terrain    new terrain wasn't visible to raycasts after 5 s, so nothing was scanned"
 	expect(string.find(result.rows[1].text, wanted, 1, true), result.text)
+	expect(not string.find(result.text, "couldn't wait", 1, true), result.text)
 	expect(#root:GetChildren() == 0 and #world.blocks == 0, "scene cleaned up")
+end)
+
+test("P34's facets overlap by 2/3 of zFightSeamWidth, at least 1.5x the float sliver where they are; skipped when that can't fit", function()
+	local SelfTest = require("../harness").module("SelfTest")
+	local far = SelfTest.DEFAULT_ORIGIN
+	for _, case in {
+		{ width = D.zFightSeamWidth, origin = far, overlap = D.zFightSeamWidth * 2 / 3 },
+		{ width = 0.2, origin = far, overlap = 0.2 * 2 / 3 },
+		-- 2/3 of it is under the sliver out there (about 0.0118): 1.5x that.
+		{ width = 0.025, origin = far, overlap = 0.0177 },
+		{ width = 0.01, origin = Vector3.new(4000, 0, 4000), overlap = 0.01 * 2 / 3 },
+		{ width = 0.018, origin = far },
+		{ width = 0.01, origin = far },
+		{ width = 0, origin = Vector3.new(4000, 0, 4000) },
+	} do
+		local label = ("zFightSeamWidth %g at %s"):format(case.width, tostring(case.origin))
+		local root, world = emptyWorld()
+		local config = BG.Config.merge({ zFightSeamWidth = case.width })
+		local scene = BG.TestScene.build(root, world, config, case.origin)
+		local p34 = nil
+		for _, p in scene.planted do
+			if p.id == "P34" then
+				p34 = p
+			end
+		end
+		local land = scene.folder:FindFirstChild("LandFacets")
+		if not case.overlap then
+			expect(p34 == nil, label .. ": P34 planted")
+			-- The control (facets laid edge to edge) is still there, and clean.
+			expect(#land:GetChildren() == 2, label .. ": " .. #land:GetChildren() .. " facets")
+			local report = BG.scan(land, { world = world, config = { zFightSeamWidth = case.width } })
+			expect(#report.issues == 0, label .. ": " .. BG.format(report))
+		else
+			expect(p34 ~= nil, label .. ": P34 not planted")
+			local report = BG.scan(land, { world = world, config = { zFightSeamWidth = case.width } })
+			local seams = checks(report, "zseam")
+			expect(#seams == 1 and #report.issues == 1 and table.find(seams[1].parts, p34.part), label .. ": " .. BG.format(report))
+			near(seams[1].width, case.overlap, 0.002, label .. ": width")
+		end
+	end
 end)

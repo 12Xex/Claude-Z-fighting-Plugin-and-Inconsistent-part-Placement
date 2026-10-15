@@ -16,9 +16,15 @@
 	  P26 TubTop#3           zfight      fix   one of three same-named parts (found by path)
 	  P33 Turnaround         unclassified flag Asphalt pad with no road name: listed in
 	                                           report.unclassified (a note, not an issue)
+	  P33b Lookout_Yard      unclassified flag Asphalt yard a road runs onto and stops in
+	                                           (the road covers only part of it)
+	  P33c Shoulder          unclassified flag Pebble shoulder 2.5 studs wide
 	  P34 LandFacets/Facet#2 zseam       flag  wedge facets overlapping 0.02 (2/3 of
-	                                           zFightSeamWidth) along their shared edge
-	                                           (barely visible; not nudged)
+	                                           zFightSeamWidth, at least 1.5x the float
+	                                           sliver a scan ignores there) along their
+	                                           shared edge (barely visible; not nudged).
+	                                           Not planted when seams are off or too
+	                                           narrow for that overlap.
 
 	Controls added here: a wider sleeve, a corner wedge resting on a block,
 	the same 0.02 gap seen up close, wedge facets laid exactly edge to edge,
@@ -26,18 +32,21 @@
 	and a RoofRail by the road, a Highway_Exit sign on a post, a RoadSign
 	placed on a board with Layers, a StreetLight head on a pole, a layered
 	RoadLine on the road, an ignored (tagged) crate on the main road, the P33
-	pad in a folder marked BuildGuardKind = "None".
+	pad in a folder marked BuildGuardKind = "None", the road on the P33b
+	yard, a Slate roof panel pitched 35°.
 
 	(P24 and P25 were vehicle cases; vehicles are modelled in Blender now,
 	so BuildGuard doesn't check vehicle rigs.)
 ]]
 
 local Layers = require(script.Parent.Layers)
+local Ground = require(script.Parent.Checks.Ground)
 
 local TestCases = {}
 
 local STEEL = Color3.fromRGB(120, 120, 130)
 local DARK = Color3.fromRGB(30, 30, 30)
+local ASPHALT = Color3.fromRGB(60, 60, 64)
 
 -- Meshes, round parts, corner wedges, far view, repeated names.
 function TestCases.faces(b, origin)
@@ -119,11 +128,18 @@ function TestCases.faces(b, origin)
 		first.Parent, second.Parent = land, land
 		return first, second
 	end
-	-- 0.02 by default: under the seam width, and over the float-rounding
-	-- sliver a scan ignores far out (about 0.012 at the self-test's spot).
-	local overlap = b.config.zFightSeamWidth * 2 / 3
-	local _, seam = facets(104, overlap)
-	b.plant(seam, "P34", "zseam", "flag", ("wedge facets overlapping %.3f along their shared edge"):format(overlap))
+	-- 2/3 of the seam width (0.02 by default), but at least 1.5x the
+	-- float-rounding sliver a scan ignores where the facets are (as in
+	-- Geometry.coplanarOverlap: about 0.012 at the self-test's spot). With
+	-- seams off, or too narrow for that plus its rounding, it's skipped.
+	local width = b.config.zFightSeamWidth
+	local at = (b.base * o * CFrame.new(104, 2, 0)).Position
+	local sliver = math.max(1e-3, 4 * 2 ^ -23 * math.max(math.abs(at.X), math.abs(at.Y), math.abs(at.Z)))
+	local overlap = math.max(width * 2 / 3, 1.5 * sliver)
+	if width > 0 and overlap + sliver / 2 < width then
+		local _, seam = facets(104, overlap)
+		b.plant(seam, "P34", "zseam", "flag", ("wedge facets overlapping %.3f along their shared edge"):format(overlap))
+	end
 	-- Control: the same facets laid exactly edge to edge.
 	local edgeA, edgeB = facets(116, 0)
 	b.control(edgeA)
@@ -176,13 +192,20 @@ function TestCases.names(b, road)
 	crate.CFrame = cf * CFrame.new(-half.X + 4, half.Y + 1.5, 0) -- clear of the stop line
 	crate:AddTag("BuildGuardIgnore")
 
+	-- Puts `p` level, its centre `height` above the ground at (x, z) in the
+	-- road's frame.
+	local function onGround(p, x, z, height)
+		local spot = cf:PointToWorldSpace(Vector3.new(x, 0, z))
+		p.CFrame = CFrame.new(spot.X, b.base.Position.Y + height, spot.Z) * cf.Rotation
+		return p
+	end
+
 	-- P33: a turnaround pad of asphalt with no road name, on the ground
 	-- beyond the sign row: listed as a road-like slab nothing checks. The
 	-- same pad in a folder marked BuildGuardKind = "None" isn't.
 	local function pad(x, parent)
-		local p = b.part("Turnaround", Vector3.new(10, 0.4, 10), CFrame.new(), Color3.fromRGB(60, 60, 64), Enum.Material.Asphalt)
-		local spot = cf:PointToWorldSpace(Vector3.new(x, 0, half.Z + 10))
-		p.CFrame = CFrame.new(spot.X, b.base.Position.Y + 0.2, spot.Z) * cf.Rotation
+		local p = b.part("Turnaround", Vector3.new(10, 0.4, 10), CFrame.new(), ASPHALT, Enum.Material.Asphalt)
+		onGround(p, x, half.Z + 10, 0.2)
 		p.Parent = parent or p.Parent
 		return p
 	end
@@ -192,6 +215,30 @@ function TestCases.names(b, road)
 	yards:SetAttribute("BuildGuardKind", "None")
 	yards.Parent = road.Parent
 	b.control(pad(-44, yards))
+
+	-- P33b: a yard a road runs onto and stops in. The road covers only part
+	-- of it, so it isn't a footing: listed. The road on it (resting on the
+	-- yard, inset from its edges) is a control.
+	local length = math.max(20, b.W + 4)
+	local yardSize = Vector3.new(b.W + 12, 0.4, length + 14)
+	local yard = onGround(b.part("Lookout_Yard", yardSize, CFrame.new(), ASPHALT, Enum.Material.Asphalt), 104, half.Z + 10, 0.2)
+	b.plant(yard, "P33b", "unclassified", "flag", "yard a road runs onto, covering part of it")
+	local thick = road.Size.Y
+	local lift = Ground.effectiveLift(b.config.roadLift, thick, false)
+	local onYard = b.part("Road_Lookout", Vector3.new(b.W, thick, length), CFrame.new(), ASPHALT, Enum.Material.Asphalt)
+	onYard.CFrame = yard.CFrame * CFrame.new(0, yardSize.Y / 2 + lift + thick / 2, -yardSize.Z / 2 + 6 + length / 2)
+	b.control(onYard)
+
+	-- P33c: a pebble shoulder 2.5 studs wide (too narrow to be a road by
+	-- its name, wide enough to drive a wheel on): listed.
+	local shoulder = b.part("Shoulder", Vector3.new(20, 0.4, 2.5), CFrame.new(), Color3.fromRGB(130, 120, 105), Enum.Material.Pebble)
+	b.plant(onGround(shoulder, -62, half.Z + 10, 0.2), "P33c", "unclassified", "flag", "pebble shoulder 2.5 studs wide")
+
+	-- Control: a slate roof panel pitched 35°, not a slab anyone drives on.
+	local roof = b.part("Roof", Vector3.new(12, 0.4, 8), CFrame.new(), Color3.fromRGB(80, 85, 95), Enum.Material.Slate)
+	onGround(roof, -88, half.Z + 10, 6)
+	roof.CFrame *= CFrame.Angles(math.rad(35), 0, 0)
+	b.control(roof)
 end
 
 -- The 12 triangles of a closed box from `min` to `max` (local space),

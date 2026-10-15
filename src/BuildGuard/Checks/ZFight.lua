@@ -15,11 +15,13 @@
 	ways and are left alone: those faces are hidden, not flickering.
 
 	Seams: each flat overlap's width is its thinnest extent. A pair of part
-	faces overlapping only in strips narrower than zFightSeamWidth (pieces
-	laid edge to edge that overlap by a hair, such as land facets from a
-	generator) is a "zseam" warning, not fixed: it barely shows, and nudging
-	one piece off the other would leave a step. Mesh triangles are never
-	seams: a thin triangle can be one sliver of a wide overlap.
+	faces overlapping only in strips narrower than zFightSeamWidth, each
+	strip at most half as wide as either face (pieces laid edge to edge that
+	overlap by a hair, such as land facets from a generator), is a "zseam"
+	warning, not fixed: it barely shows, and nudging one piece off the other
+	would leave a step. A thin part sunk flush in a face (an inlay, a wire)
+	is as wide as its overlap, so it's still a z-fight. Mesh triangles are
+	never seams: a thin triangle can be one sliver of a wide overlap.
 
 	Far view: in a model seen from far away (zFightViewDistance), same-facing
 	faces need 2 * Config.depthStep(distance) between them. Closer than that,
@@ -32,10 +34,12 @@
 	no mover: its issue says so and isn't auto-fixable.
 	  * Flat faces: the mover is nudged outward. If it z-fights on both
 	    opposite sides of one axis, a nudge clears both but sinks one side
-	    into the other part. That's fine when the sunk side is hidden anyway (a
-	    marking's bottom against the road), so it still nudges. When both
-	    sides are visible (a window exactly as thick as its wall) it grows by
-	    the gap on each side instead.
+	    into the other part. When a third part hides one side (two markings
+	    as thick as each other, their bottoms on the road), it nudges toward
+	    that side: that side sinks into the part hiding it, and the other
+	    ends just behind the other part's face, so no gap opens under it.
+	    When both sides are visible (a window exactly as thick as its wall)
+	    it grows by the gap on each side instead.
 	  * Round surfaces: the mover's radius grows. Its CFrame stays, so joints
 	    stay valid.
 	  * A zgap keeps its order: the surface in front stays in front. A face
@@ -68,6 +72,9 @@ local GAP_SLACK = 1e-3
 local WORK_PER_YIELD = 256
 -- Moves smaller than this (studs) are float rounding, not a need.
 local MIN_NEED = 1e-6
+-- A seam's strip is at most this share of each face's width: pieces laid
+-- edge to edge each reach well past it, but an inlay is all overlap.
+local SEAM_SHARE = 0.5
 local NO_FACES = {}
 
 local function boxesNear(a, b, margin)
@@ -111,6 +118,26 @@ local function bounds(f)
 		f.min, f.max = lo, hi
 	end
 	return f.min, f.max
+end
+
+-- Thinnest extent of a flat face (cached on it), as Geometry.polygonWidth.
+local function faceWidth(f)
+	if not f.width then
+		local points, best = f.points, math.huge
+		for i, a in points do
+			local edge = points[i % #points + 1] - a
+			local length = edge.Magnitude
+			if length > 1e-9 then
+				local far = 0
+				for _, p in points do
+					far = math.max(far, (p - a):Cross(edge).Magnitude / length)
+				end
+				best = math.min(best, far)
+			end
+		end
+		f.width = if best == math.huge then 0 else best
+	end
+	return f.width
 end
 
 local function boundsTouch(fa, fb, margin)
@@ -325,14 +352,18 @@ local function pairIssue(ctx, a, b, contacts)
 	end
 	-- The widest overlap between flat part faces. Round surfaces have no
 	-- width, and a mesh's triangles tile its surface, so a thin triangle may
-	-- be one sliver of a wide overlap: neither counts.
-	local flat, widest = 0, nil
+	-- be one sliver of a wide overlap: neither counts. `slivers`: each
+	-- overlap is a thin slice of both faces, not all of one.
+	local flat, widest, slivers = 0, nil, true
 	for _, c in kept do
 		if c.width and not (c.faceA.triangle or c.faceB.triangle) then
 			flat += 1
 			if not widest or c.width > widest.width then
 				widest = c
 			end
+			slivers = slivers
+				and c.width <= SEAM_SHARE * faceWidth(c.faceA)
+				and c.width <= SEAM_SHARE * faceWidth(c.faceB)
 		end
 	end
 
@@ -350,7 +381,7 @@ local function pairIssue(ctx, a, b, contacts)
 		position = largest.position,
 		width = widest and widest.width,
 	}
-	if widest and flat == #kept and widest.width < base.zFightSeamWidth then
+	if widest and flat == #kept and slivers and widest.width < base.zFightSeamWidth then
 		-- Only thin strips overlap: barely visible, and a nudge would leave
 		-- a step between pieces meant to be flush, so it's left to a person.
 		issue.check, issue.severity, issue.planner = "zseam", "warning", nil
@@ -678,13 +709,15 @@ local function resolveRequest(request, world)
 	for axis = 1, 3 do
 		local p, n = request.pos[axis], request.neg[axis]
 		if p > 0 and n > 0 then
+			-- Toward a side a third part hides: lifting that side off it
+			-- would open a gap of light there.
 			local probe = request.gap + 0.01
 			local posHidden = hiddenBeyond(request.posFace[axis], probe, world, request.exclude)
 			local negHidden = hiddenBeyond(request.negFace[axis], probe, world, request.exclude)
 			if negHidden and not posHidden then
-				shift[axis] = p
-			elseif posHidden and not negHidden then
 				shift[axis] = -n
+			elseif posHidden and not negHidden then
+				shift[axis] = p
 			else
 				grow[axis] = p + n
 				shift[axis] = (p - n) / 2

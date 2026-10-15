@@ -8,7 +8,9 @@
 
 	It only builds where nothing is (no parts, terrain or water in the
 	scene's box), since it sets its own terrain back to Air afterwards, and
-	waits for that terrain to show up in raycasts before scanning.
+	waits for that terrain to show up in raycasts before scanning. A call
+	that can't wait (it can't yield) scans at once, and its text says where
+	to run the test if the terrain cases fail.
 
 	Options: { world?, parent?, origin?, config?, keep? }
 	Returns { passed, text, rows }, with refused = true when the spot isn't
@@ -105,7 +107,7 @@ function SelfTest.run(BuildGuard, options)
 
 	local scene = TestScene.build(parent, world, config, origin)
 	local root = scene.folder
-	local rows, failures = {}, 0
+	local rows, failures, notes = {}, 0, {}
 	local function row(ok, text)
 		if not ok then
 			failures += 1
@@ -124,6 +126,9 @@ function SelfTest.run(BuildGuard, options)
 		for _, r in rows do
 			table.insert(lines, (if r.ok then "  ok    " else "  FAIL  ") .. r.text)
 		end
+		for _, note in notes do
+			table.insert(lines, "  note  " .. note)
+		end
 		if not options.keep then
 			TestScene.destroy(scene, world)
 		end
@@ -132,12 +137,22 @@ function SelfTest.run(BuildGuard, options)
 
 	-- Voxel reads see new terrain before raycasts do: scanning too soon
 	-- finds the road under the hill but can't lift it, and misses the
-	-- tunnel roof.
-	if world.waitForTerrain and not world.waitForTerrain(scene.terrainProbes, SelfTest.TERRAIN_WAIT) then
+	-- tunnel roof. A call that can't yield can't wait, so it scans anyway.
+	local seen, why = true, nil
+	if world.waitForTerrain then
+		seen, why = world.waitForTerrain(scene.terrainProbes, SelfTest.TERRAIN_WAIT)
+	end
+	if not seen and why == "cannot-yield" then
+		table.insert(
+			notes,
+			"this call couldn't wait for the new terrain to show up in raycasts, so it scanned at once: if P5, P13 "
+				.. "or P14 fail, run the self-test from the command bar or the plugin's Run self-test button"
+		)
+	elseif not seen then
 		row(
 			false,
-			("terrain    new terrain wasn't visible to raycasts after %g s (or this call couldn't wait), so nothing "
-				.. "was scanned: P5, P13 and P14 need it. Run the self-test again"):format(SelfTest.TERRAIN_WAIT)
+			("terrain    new terrain wasn't visible to raycasts after %g s, so nothing was scanned: P5, P13 and P14 "
+				.. "need it. Run the self-test again"):format(SelfTest.TERRAIN_WAIT)
 		)
 		return finish(0)
 	end

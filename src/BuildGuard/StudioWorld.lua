@@ -508,6 +508,9 @@ function StudioWorld.new(worldRoot)
 		terrain:FillBlock(cframe, size, Enum.Material.Air)
 	end
 
+	-- True once every probe hits terrain; false, "timeout" when they still
+	-- miss after `timeout` seconds; false, "cannot-yield" when they miss and
+	-- the caller can't wait.
 	function self.waitForTerrain(probes, timeout)
 		timeout = timeout or 5
 		local params = RaycastParams.new()
@@ -527,12 +530,15 @@ function StudioWorld.new(worldRoot)
 			if seen then
 				return true
 			end
-			if waited >= timeout or not coroutine.isyieldable() then
-				return false
+			if not coroutine.isyieldable() then
+				return false, "cannot-yield"
+			end
+			if waited >= timeout then
+				return false, "timeout"
 			end
 			local ok, elapsed = pcall(task.wait)
 			if not ok then
-				return false
+				return false, "cannot-yield"
 			end
 			waited += elapsed
 		end
