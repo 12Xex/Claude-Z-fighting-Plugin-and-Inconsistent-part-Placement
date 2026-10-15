@@ -313,6 +313,26 @@ function Geometry.polygonSeparation(p, q)
 	return best
 end
 
+-- Thinnest extent of a convex polygon: the narrowest gap two parallel lines
+-- holding it can have. One of those lines always runs along an edge, so
+-- it's the smallest, over the edges, of the furthest vertex from that edge.
+function Geometry.polygonWidth(poly)
+	local best = math.huge
+	for i = 1, #poly do
+		local a, b = poly[i], poly[i % #poly + 1]
+		local dx, dy = b[1] - a[1], b[2] - a[2]
+		local len = math.sqrt(dx * dx + dy * dy)
+		if len > 1e-9 then
+			local far = 0
+			for _, p in poly do
+				far = math.max(far, math.abs(dx * (p[2] - a[2]) - dy * (p[1] - a[1])) / len)
+			end
+			best = math.min(best, far)
+		end
+	end
+	return if best == math.huge then 0 else best
+end
+
 local function planeBasis(n)
 	local ref = if math.abs(n.Y) < 0.9 then Vector3.new(0, 1, 0) else Vector3.new(1, 0, 0)
 	local u = ref:Cross(n).Unit
@@ -354,9 +374,10 @@ local MIN_OVERLAP_WIDTH = 1e-3
 local FLOAT_STEPS = 4 * 2 ^ -23
 
 -- If faces `fa` and `fb` point the same way, lie within `tolerance` of each
--- other and overlap, returns (overlapArea, distance, centroid) where distance
--- is how far fb's plane sits in front of fa's along fa's normal and centroid
--- is the middle of the overlap (on fa's plane). Otherwise nil.
+-- other and overlap, returns (overlapArea, distance, centroid, width) where
+-- distance is how far fb's plane sits in front of fa's along fa's normal,
+-- centroid is the middle of the overlap (on fa's plane) and width is the
+-- overlap's thinnest extent (Geometry.polygonWidth). Otherwise nil.
 -- Faces laid edge to edge far from the origin overlap by a float-rounding
 -- sliver (about 1e-4 studs wide). That never flickers, so an overlap that
 -- moving a face by less than MIN_OVERLAP_WIDTH would clear doesn't count.
@@ -384,7 +405,7 @@ function Geometry.coplanarOverlap(fa, fb, tolerance, minArea)
 		return nil
 	end
 	local cx, cy = polygonCentroid(clipped)
-	return area, distance, fa.center + u * cx + v * cy
+	return area, distance, fa.center + u * cx + v * cy, Geometry.polygonWidth(clipped)
 end
 
 --------------------------------------------------------------------------------

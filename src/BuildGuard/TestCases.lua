@@ -14,12 +14,15 @@
 	  P22 Roof_Corner        zfight      fix   corner wedge side flush with a block
 	  P23 Billboard_Sign     zgap        fix   0.02 off its board in a model seen from 300 studs
 	  P26 TubTop#3           zfight      fix   one of three same-named parts (found by path)
+	  P34 LandFacets/Facet#2 zseam       flag  wedge facets overlapping 0.01 along their
+	                                           shared edge (barely visible; not nudged)
 
 	Controls added here: a wider sleeve, a corner wedge resting on a block,
-	the same 0.02 gap seen up close, a StreetLamp, two RoadSigns and a
-	RoofRail by the road, a Highway_Exit sign on a post, a RoadSign placed
-	on a board with Layers, a StreetLight head on a pole, a layered RoadLine
-	on the road, an ignored (tagged) crate on the main road.
+	the same 0.02 gap seen up close, wedge facets laid exactly edge to edge,
+	a washboard rib flush on a deck at layer 0, a StreetLamp, two RoadSigns
+	and a RoofRail by the road, a Highway_Exit sign on a post, a RoadSign
+	placed on a board with Layers, a StreetLight head on a pole, a layered
+	RoadLine on the road, an ignored (tagged) crate on the main road.
 
 	(P24 and P25 were vehicle cases; vehicles are modelled in Blender now,
 	so BuildGuard doesn't check vehicle rigs.)
@@ -96,7 +99,34 @@ function TestCases.faces(b, origin)
 	-- TubLip overlaps TubTop#3's end by 0.5 with its faces flush.
 	b.part("TubLip", Vector3.new(1, 0.5, 3), o * CFrame.new(91.5, 1, 0), STEEL).Parent = tubs
 	b.plant(third, "P26", "zfight", "fix", "TubTop#3 among three TubTops")
-	return { far = far, tubs = tubs }
+
+	-- P34: land facets as a generator makes them. Two wedges thin along X,
+	-- X turned up, make a square: the first's Right face is on top; the
+	-- second is turned over about their shared edge (the square's diagonal),
+	-- so its Left face is on top, then pushed `overlap` across that edge.
+	local land = b.model("LandFacets")
+	local GRASS = Color3.fromRGB(90, 140, 70)
+	local function facets(x, overlap)
+		local frame = o * CFrame.new(x, 2, 0) * CFrame.Angles(0, 0, math.pi / 2)
+		local s = overlap / math.sqrt(2)
+		local turned = frame * CFrame.new(0, -s, s) * CFrame.fromAxisAngle(Vector3.new(0, 1, 1).Unit, math.pi)
+		local first = b.part("Facet", Vector3.new(0.2, 8, 8), frame, GRASS, Enum.Material.Grass, "WedgePart")
+		local second = b.part("Facet", Vector3.new(0.2, 8, 8), turned, GRASS, Enum.Material.Grass, "WedgePart")
+		first.Parent, second.Parent = land, land
+		return first, second
+	end
+	local _, seam = facets(104, 0.01)
+	b.plant(seam, "P34", "zseam", "flag", "wedge facets overlapping 0.01 along their shared edge")
+	-- Control: the same facets laid exactly edge to edge.
+	local edgeA, edgeB = facets(116, 0)
+	b.control(edgeA)
+	b.control(edgeB)
+
+	-- Control: a washboard rib at layer 0, flush on a deck from side to side.
+	local deck = b.part("RibDeck", Vector3.new(12, 1, 8), o * CFrame.new(104, 0.5, 14), Color3.fromRGB(170, 170, 160), Enum.Material.Concrete)
+	local rib = b.part("Washboard_Rib", Vector3.new(8, 0.22, 0.6), CFrame.new(), Color3.fromRGB(120, 105, 90))
+	b.control(Layers.place(rib, deck, { layer = 0, rotation = 90, config = b.config }))
+	return { far = far, tubs = tubs, land = land }
 end
 
 -- Parts named like roads/rails that aren't, beside a road, and an ignored

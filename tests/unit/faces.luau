@@ -84,7 +84,7 @@ local function involves(issues, a, b)
 end
 
 -- Every issue from these checks says where to look.
-local OWN_CHECKS = { zfight = true, zgap = true, duplicate = true, meshoverlap = true }
+local OWN_CHECKS = { zfight = true, zgap = true, zseam = true, duplicate = true, meshoverlap = true }
 local function expectPositions(report)
 	for _, issue in report.issues do
 		if OWN_CHECKS[issue.check] then
@@ -591,7 +591,7 @@ test("z-fight messages give the path (with #n for repeated names) and where to l
 	expect(#z == 1)
 	expect(
 		z[1].message
-			== "Workspace/Tub/TubTop#1 and Workspace/Tub/TubTop#2 z-fight at (3.00, 6.00, -0.50): Front/Front face(s) overlap 4.00 studs²",
+			== "Workspace/Tub/TubTop#1 and Workspace/Tub/TubTop#2 z-fight at (3.00, 6.00, -0.50): Front/Front face(s) overlap 4.00 studs², 2.00 wide",
 		z[1].message
 	)
 	near((z[1].position - Vector3.new(3, 6, -0.5)).Magnitude, 0, 1e-4)
@@ -726,6 +726,198 @@ test("parts laid edge to edge far from the origin don't z-fight along the shared
 			near(c.area, 0.05 * 512, 0.5, "the whole 0.05-wide strip (float32 positions)")
 		end
 	end
+end)
+
+T.section("Layer 0")
+
+test("layer 0: a 0.22 rib rests flush on the road, scans clean and rides along when the road is snapped", function()
+	local root, world, part = setup()
+	expect(BG.Layers.lift(0) == 0, "no lift")
+	expect(BG.Layers.lift(0, BG.Config.merge({ zFightViewDistance = FAR })) == 0, "not even seen from far away")
+	local road = part("Road_Main", Vector3.new(60, 0.8, 22), CFrame.new(0, 0.4, 0))
+	-- Across the road, its ends in line with the road's sides.
+	local rib = BG.Layers.place(part("Washboard_Rib", Vector3.new(22, 0.22, 0.6), CFrame.new()), road, { layer = 0, u = 5, rotation = 90 })
+	expect(rib:GetAttribute("BuildGuardLayer") == 0)
+	near(rib.CFrame.Position.Y - 0.11, 0.8, 1e-4, "bottom on the road top")
+	near(rib.CFrame.Position.X, 5, 1e-4, "u offset")
+	near(math.abs(rib.CFrame.RightVector.Z), 1, 1e-4, "turned across the road")
+	local report = BG.scan(root, { world = world })
+	expect(report.counts.error == 0 and report.counts.warning == 0, BG.format(report))
+
+	-- Raised off the ground with its rib, the road snaps down and the rib comes along.
+	road.CFrame += Vector3.new(0, 3, 0)
+	rib.CFrame += Vector3.new(0, 3, 0)
+	report = BG.scan(root, { world = world })
+	expect(#checks(report, "offground") == 1, BG.format(report))
+	BG.apply((BG.planFixes(report)))
+	near(road.CFrame.Position.Y - 0.4, D.roadLift, 1e-4, "road snapped")
+	near(rib.CFrame.Position.Y - 0.11, road.CFrame.Position.Y + 0.4, 1e-4, "rib still on the road top")
+	report = BG.scan(root, { world = world })
+	expect(report.counts.error == 0 and report.counts.warning == 0, BG.format(report))
+end)
+
+test("layer 0: overlapping items both at layer 0 z-fight (their bottoms are coplanar) and are fixed", function()
+	local root, world, part = setup()
+	local deck = part("Deck", Vector3.new(20, 1, 20), CFrame.new(0, 0.5, 0))
+	local a = BG.Layers.place(part("PlateA", Vector3.new(4, 0.1, 4), CFrame.new()), deck, { layer = 0 })
+	local b = BG.Layers.place(part("PlateB", Vector3.new(4, 0.2, 4), CFrame.new()), deck, { layer = 0, u = 2, v = 1 })
+	local report = BG.scan(root, { world = world })
+	local z = checks(report, "zfight")
+	expect(#z == 1 and involves(z, a, b), BG.format(report))
+	expect(string.find(z[1].message, "Bottom/Bottom face(s) overlap 6.00 studs²", 1, true), z[1].message)
+	BG.apply((BG.planFixes(report)))
+	report = BG.scan(root, { world = world })
+	expect(report.counts.error == 0 and report.counts.warning == 0, BG.format(report))
+end)
+
+T.section("Seams")
+
+-- Two thin wedges making a square land facet (2h across): each is thin
+-- along X, with X turned up. A's Right face is on top; B is turned over
+-- about their shared edge (the square's diagonal), so its Left face is on
+-- top and its triangle fills the rest of the square, then pushed `overlap`
+-- across the edge into A.
+local function facetPair(parent, at, overlap, h, t)
+	h, t = h or 4, t or 0.2
+	local frame = at * CFrame.Angles(0, 0, math.pi / 2)
+	local size = Vector3.new(t, 2 * h, 2 * h)
+	local s = overlap / math.sqrt(2)
+	local a = newPart("WedgePart", parent, "Facet", size, frame)
+	local b = newPart("WedgePart", parent, "Facet", size, frame * CFrame.new(0, -s, s) * CFrame.fromAxisAngle(Vector3.new(0, 1, 1).Unit, math.pi))
+	return a, b
+end
+
+test("overlap width: the thinnest extent of the overlap polygon, also given by coplanarOverlap", function()
+	local G = BG.Geometry
+	near(G.polygonWidth({ { 0, 0 }, { 10, 0 }, { 10, 0.5 }, { 0, 0.5 } }), 0.5, 1e-9, "a strip")
+	near(G.polygonWidth({ { 0, 0 }, { 4, 0 }, { 0, 3 } }), 2.4, 1e-9, "3-4-5 triangle: its smallest height")
+	near(G.polygonWidth({ { 0, 0 }, { 1, 0 }, { 1, 0 }, { 1, 1 }, { 0, 1 } }), 1, 1e-9, "repeated points are skipped")
+	-- A sign hanging 0.02 over a wall's right edge, its front flush with the wall's.
+	local wall = G.solidFrom(CFrame.new(0, 5, 0), Vector3.new(10, 10, 1), "Block")
+	local sign = G.solidFrom(CFrame.new(5.98, 5, -0.3), Vector3.new(2, 2, 0.4), "Block")
+	local found
+	for _, fa in G.faces(wall) do
+		for _, fb in G.faces(sign) do
+			local area, _, _, width = G.coplanarOverlap(fa, fb, 0.01, 0.01)
+			if area then
+				found = width
+				near(area, 0.04, 1e-4, "area")
+			end
+		end
+	end
+	expect(found ~= nil, "front faces overlap")
+	near(found, 0.02, 1e-4, "width")
+end)
+
+test("seams: wedge facets overlapping by a hair along their shared edge are a zseam warning, left alone", function()
+	local root, world = setup()
+	local land = model(root, "LandBase")
+	local a, b = facetPair(land, CFrame.new(0, 2, 0), 0.01)
+	-- Control: the same pair laid exactly edge to edge.
+	local c, d = facetPair(land, CFrame.new(20, 2, 0), 0)
+	local report = BG.scan(root, { world = world })
+	local seams = checks(report, "zseam")
+	expect(#seams == 1 and involves(seams, a, b), BG.format(report))
+	expect(#checks(report, "zfight") == 0 and not involves(report.issues, c) and not involves(report.issues, d), BG.format(report))
+	local issue = seams[1]
+	expect(issue.severity == "warning" and not BG.isFixable(issue), "a warning, not fixed")
+	expect(
+		string.find(
+			issue.message,
+			"Workspace/LandBase/Facet#1 and Workspace/LandBase/Facet#2 overlap in a strip 0.010 studs wide along their shared edge (Right/Left, Left/Right faces, 0.23 studs²) at (",
+			1,
+			true
+		),
+		issue.message
+	)
+	expect(
+		string.find(issue.message, "): barely visible; pull the pieces apart in their plane (often a generator overlapping pieces by a hair)", 1, true),
+		issue.message
+	)
+	near(issue.width, 0.01, 1e-4, "issue width")
+	-- The middle of the strip on the top faces, beside the diagonal.
+	near((issue.position - Vector3.new(0, 2.1, 0)).Magnitude, 0, 0.01, "position")
+	local plan, unfixed = BG.planFixes(report)
+	expect(#plan.items == 0 and #unfixed == 1 and unfixed[1] == issue, BG.Plan.describe(plan))
+	expectPositions(report)
+end)
+
+test("seams: a wider overlap along the same edge is a z-fight error whose message gives the strip's width", function()
+	local root, world = setup()
+	local a, b = facetPair(root, CFrame.new(0, 2, 0), 0.05)
+	local report = BG.scan(root, { world = world })
+	local z = checks(report, "zfight")
+	expect(#z == 1 and involves(z, a, b) and #checks(report, "zseam") == 0, BG.format(report))
+	expect(z[1].severity == "error" and BG.isFixable(z[1]))
+	expect(string.find(z[1].message, "Right/Left, Left/Right face(s) overlap 1.12 studs², a strip 0.050 wide", 1, true), z[1].message)
+	near(z[1].width, 0.05, 1e-4, "issue width")
+end)
+
+test("seams: a pair with one wide contact stays a z-fight, however thin its other contacts", function()
+	local root, world, part = setup()
+	part("Wall", Vector3.new(10, 4, 1), CFrame.new(0, 2, 0))
+	-- A 0.01-thick trim: its front is flush with the wall's (1 wide) and its
+	-- top with the wall's top (0.01 wide).
+	local trim = part("Trim", Vector3.new(2, 1, 0.01), CFrame.new(0, 3.5, -0.495))
+	local report = BG.scan(root, { world = world })
+	local z = checks(report, "zfight")
+	expect(#z == 1 and involves(z, trim) and #z[1].contacts == 2 and #checks(report, "zseam") == 0, BG.format(report))
+	expect(string.find(z[1].message, "overlap 2.02 studs², 1.00 wide", 1, true), z[1].message)
+end)
+
+-- A closed box mesh fitted to `size` whose top is cut into `n` strips along X.
+local function stripedTop(size, n)
+	local h = size / 2
+	local out = {}
+	for _, t in boxTriangles(size) do
+		if not (t[1].Y == h.Y and t[2].Y == h.Y and t[3].Y == h.Y) then
+			table.insert(out, t)
+		end
+	end
+	for i = 0, n - 1 do
+		local x0, x1 = -h.X + size.X * i / n, -h.X + size.X * (i + 1) / n
+		local p00, p10 = Vector3.new(x0, h.Y, -h.Z), Vector3.new(x1, h.Y, -h.Z)
+		local p11, p01 = Vector3.new(x1, h.Y, h.Z), Vector3.new(x0, h.Y, h.Z)
+		table.insert(out, { p00, p11, p10 })
+		table.insert(out, { p00, p01, p11 })
+	end
+	return out
+end
+
+test("seams: mesh triangles are never seams (thin triangles can tile a wide overlap)", function()
+	local root, world, part = setup()
+	part("Slab", Vector3.new(20, 1, 20), CFrame.new(0, 0.5, 0))
+	local plate = mesh(root, "Plate", Vector3.new(2, 0.2, 2), CFrame.new(1, 0.9, 1))
+	-- 100 strips 0.02 wide: every triangle is thinner than zFightSeamWidth.
+	world.setMeshTriangles(plate, stripedTop(plate.Size, 100))
+	local report = BG.scan(root, { world = world })
+	local z = checks(report, "zfight")
+	expect(#z == 1 and involves(z, plate) and #checks(report, "zseam") == 0, BG.format(report))
+	near(totalArea(z[1]), 4, 1e-3, "the plate's whole top")
+	expect(not string.find(z[1].message, "wide", 1, true), "a triangle's width isn't the overlap's: " .. z[1].message)
+	expect(z[1].width == nil)
+end)
+
+test("seams: zFightSeamWidth is global; 0 turns seams off", function()
+	local root, world = setup()
+	expect(D.zFightSeamWidth == 0.03)
+	local a, b = facetPair(root, CFrame.new(0, 2, 0), 0.01)
+	local report = BG.scan(root, { world = world, config = { zFightSeamWidth = 0 } })
+	expect(#checks(report, "zseam") == 0 and involves(checks(report, "zfight"), a, b), BG.format(report))
+	report = BG.scan(root, { world = world, config = { zFightSeamWidth = 0.005 } })
+	expect(#checks(report, "zseam") == 0 and #checks(report, "zfight") == 1, BG.format(report))
+	expect(not pcall(BG.setConfig, root, { zFightSeamWidth = 0.1 }, "facets"), "can't be set per model")
+	expect(not pcall(BG.Config.merge, { zFightSeamWidth = -1 }), "out of range")
+end)
+
+test("seams far from the origin (float32 positions): a 0.012 overlap is a seam, edge to edge is nothing", function()
+	local root, world = setup()
+	local a, b = facetPair(root, CFrame.new(9000, 10, -9000) * CFrame.Angles(0, math.rad(23), 0), 0.012, 6)
+	facetPair(root, CFrame.new(-9000, 10, 9000) * CFrame.Angles(0, math.rad(23), 0), 0, 6)
+	local report = BG.scan(root, { world = world })
+	local seams = checks(report, "zseam")
+	expect(#seams == 1 and involves(seams, a, b) and #report.issues == 1, BG.format(report))
+	near(seams[1].width, 0.012, 0.002, "width")
 end)
 
 T.section("Yielding")
