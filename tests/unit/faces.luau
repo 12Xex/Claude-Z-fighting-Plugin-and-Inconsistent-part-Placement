@@ -834,7 +834,7 @@ test("crossing markings too thin to sink by the nudge (P4 at zFightNudge 0.1 and
 	end
 end)
 
-test("self-test passes with zFightNudge 0.1 at its default spot (P4's crossing markings are as thick as the nudge)", function()
+test("self-test passes with zFightNudge 0.1 at its default spot (P4's crossing markings are thick enough to sink by the nudge)", function()
 	local root = Instance.new("Folder")
 	root.Name = "Workspace"
 	local result = BG.selfTest({ world = T.FakeWorld.new(root, BG.Geometry), parent = root, config = { zFightNudge = 0.1 } })

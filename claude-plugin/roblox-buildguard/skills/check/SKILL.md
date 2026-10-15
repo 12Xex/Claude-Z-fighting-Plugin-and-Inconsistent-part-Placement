@@ -26,7 +26,7 @@ Check the build at `$ARGUMENTS` (use `workspace` if nothing was given) with Buil
    return (BG.jobStatus("<id>", { page = 1 }))
    ```
    A long report comes a page (120 lines) at a time: ask for the next page until one ends with `(page m of m, the last page)`.
-   Show the user the report and the fix preview, grouped by check, with each part's path and position. Mention the `Meshes:` line if any meshes were checked by box only (those weren't checked for z-fighting), and every `[NOTE]`, including the one listing flat road-like slabs that aren't checked as roads (they need a road name or tag, or `BuildGuardKind = "None"`).
+   Show the user the report and the fix preview, grouped by check, with each part's path and position. Mention the `Meshes:` line if any meshes were checked by box only (those weren't checked for z-fighting), and every `[NOTE]`, including the one listing flat road-like slabs that aren't checked as roads (they need a road name or tag, or `BuildGuardKind = "None"`). Only terrain and parts inside `<path>` hide a z-fight, so if it reports the flush sides and bottoms of footings under overlapping road pieces and their ground is parts outside `<path>`, check a model holding both before fixing them.
 3. Ask whether to apply the previewed fixes. If the build holds vehicles that aren't tagged `BuildGuardIgnore`, say that fixes would also move their parts, and leave them out (tag them, or fix a smaller model) unless the user says otherwise. Only after they say yes, run:
    ```lua
    local BG = require(game.ServerStorage.BuildGuard)
