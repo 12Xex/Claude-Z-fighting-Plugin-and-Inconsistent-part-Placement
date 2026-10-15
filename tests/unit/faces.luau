@@ -1521,3 +1521,122 @@ test("hidden-contact checks stay quick and yield: a mesh path flush in the groun
 	expect(seconds < 4, ("z-fight check took %.2f s"):format(seconds))
 	expect(longest < 0.2, ("%.3f s of z-fight work without a yield"):format(longest))
 end)
+
+T.section("Hidden contacts: edge cases")
+
+local function deckInlay()
+	local root, world, part = setup()
+	part("Deck", Vector3.new(30, 1, 30), CFrame.new(0, 0.5, 0))
+	local inlay = part("Inlay", Vector3.new(10, 0.1, 2), CFrame.new(0, 0.95, 0))
+	return root, world, part, inlay
+end
+
+local function deckInlayReported(root, world)
+	for _, issue in checks(BG.scan(root, { world = world }), "zfight") do
+		if issue.parts[1].Name == "Deck" or issue.parts[2].Name == "Deck" then
+			return true
+		end
+	end
+	return false
+end
+
+test("many small props on the open stretches of a partly held contact don't hide it", function()
+	local root, world, part = deckInlay()
+	-- Three studs sunk across the inlay hold three stretches of it; the
+	-- stretches between them are open to the sky.
+	for _, x in { -4.5, 0, 4.5 } do
+		part("Stud", Vector3.new(1, 0.4, 3), CFrame.new(x, 1, 0))
+	end
+	expect(deckInlayReported(root, world), "open stretches without props")
+	for k = 1, 17 do
+		local x = -2.25 + ((k - 1) % 4) * 0.5 + (if k > 8 then 4.5 else 0)
+		part("Pebble", Vector3.new(0.25, 0.25, 0.25), CFrame.new(x, 1.125, -0.5 + ((k - 1) // 4 % 2) * 0.5))
+	end
+	expect(deckInlayReported(root, world), "17 pebbles hid the open stretches")
+end)
+
+test("a tunnel in the terrain under a buried contact shows it, even between its sample corners", function()
+	local function run(withTunnel)
+		local root, world, part = setup()
+		part("PlateA", Vector3.new(10, 1, 10), CFrame.new(0, -5.5, 0))
+		part("PlateB", Vector3.new(6, 2, 6), CFrame.new(0, -6, 0))
+		if withTunnel then
+			-- A 1.6-wide tunnel at x 1.2..2.8: the overlap's corners (x = ±3)
+			-- and middle (x = 0) are all in rock.
+			world.fillTerrain(CFrame.new(-10.4, -10, 0), Vector3.new(23.2, 20, 40), "Rock")
+			world.fillTerrain(CFrame.new(11.4, -10, 0), Vector3.new(17.2, 20, 40), "Rock")
+		else
+			world.fillTerrain(CFrame.new(0, -10, 0), Vector3.new(40, 20, 40), "Rock")
+		end
+		return #checks(BG.scan(root, { world = world }), "zfight")
+	end
+	expect(run(false) == 0, "buried in solid rock: hidden")
+	expect(run(true) == 1, "the tunnel shows it")
+end)
+
+test("a footing under two road pieces meeting over its middle with a hairline joint stays clean", function()
+	for _, at in { Vector3.zero, Vector3.new(8000, 0, -8000) } do
+		local root, world, part = setup()
+		local gap = if at.Magnitude > 0 then 0.002 else 0.0006
+		part("Ground_Yard", Vector3.new(40, 1.2, 40), CFrame.new(at + Vector3.new(0, 0.6, 0)))
+		part("Footing_Road_West", Vector3.new(28, 4, 22), CFrame.new(at + Vector3.new(0, -0.8, 0)))
+		for _, side in { -1, 1 } do
+			part("Road_West", Vector3.new(14, 0.8, 22), CFrame.new(at + Vector3.new(side * (7 + gap / 2), 1.6, 0)))
+		end
+		for _, issue in checks(BG.scan(root, { world = world }), "zfight") do
+			for _, p in issue.parts do
+				expect(not string.find(p.Name, "Footing", 1, true), "footing reported at " .. tostring(at) .. ": " .. issue.message)
+			end
+		end
+	end
+end)
+
+test("a small open patch in a huge covered contact is still reported", function()
+	local root, world, part = setup()
+	part("SeaFloor", Vector3.new(2000, 2, 2000), CFrame.new(0, 9, 0))
+	part("Shore", Vector3.new(2010, 3, 2010), CFrame.new(0, 8.5, 0))
+	-- Four plates resting on top cover it all but a 2x2 hole away from its
+	-- middle (4 studs² of 4,000,000: within a share-only slack).
+	part("LandW", Vector3.new(1304, 1, 2010), CFrame.new(-353, 10.5, 0))
+	part("LandE", Vector3.new(704, 1, 2010), CFrame.new(653, 10.5, 0))
+	part("LandS", Vector3.new(2, 1, 1304), CFrame.new(300, 10.5, -353))
+	part("LandN", Vector3.new(2, 1, 704), CFrame.new(300, 10.5, 653))
+	local found = false
+	for _, issue in checks(BG.scan(root, { world = world }), "zfight") do
+		local a, b = issue.parts[1].Name, issue.parts[2].Name
+		found = found or (a == "SeaFloor" and b == "Shore") or (a == "Shore" and b == "SeaFloor")
+	end
+	expect(found, "the 4 studs² hole was treated as covered")
+end)
+
+test("loose parts and vehicles parked over a z-fight don't hide it; an anchored crate does", function()
+	local function reported(setupCover)
+		local root, world, part = setup()
+		part("Road_Deck", Vector3.new(20, 1, 20), CFrame.new(0, 0.5, 0))
+		part("ManholeCover", Vector3.new(4, 0.1, 4), CFrame.new(0, 0.95, 0))
+		setupCover(root, part)
+		for _, issue in checks(BG.scan(root, { world = world }), "zfight") do
+			if issue.parts[1].Name == "ManholeCover" or issue.parts[2].Name == "ManholeCover" then
+				return true
+			end
+		end
+		return false
+	end
+	expect(reported(function() end), "uncovered")
+	expect(not reported(function(_, part)
+		part("Crate", Vector3.new(6, 2, 6), CFrame.new(0, 2, 0))
+	end), "an anchored crate hides it")
+	expect(reported(function(_, part)
+		part("Crate", Vector3.new(6, 2, 6), CFrame.new(0, 2, 0)).Anchored = false
+	end), "a loose crate hid it")
+	expect(reported(function(root, part)
+		local cart = Instance.new("Model")
+		cart.Name = "MineCart"
+		cart.Parent = root
+		local body = part("Body", Vector3.new(6, 2, 6), CFrame.new(0, 2, 0), cart)
+		local seat = Instance.new("VehicleSeat")
+		seat.Size, seat.CFrame, seat.Anchored, seat.Parent = Vector3.new(2, 1, 2), CFrame.new(0, 3.5, 0), true, cart
+		local weld = Instance.new("WeldConstraint")
+		weld.Part0, weld.Part1, weld.Enabled, weld.Parent = body, seat, true, body
+	end), "a parked cart hid it")
+end)

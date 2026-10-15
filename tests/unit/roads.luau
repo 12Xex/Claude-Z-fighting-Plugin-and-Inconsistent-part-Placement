@@ -1396,3 +1396,27 @@ test("unclassified: finding them costs no raycasts or part queries", function()
 	local listed = BG.Classify.unclassified(ctx)
 	expect(#listed == 40 and calls == 0, ("%d listed, %d world queries"):format(#listed, calls))
 end)
+
+test("gap: a ditch that only drains towards a drop is still reported, not taken for a bank", function()
+	local root, world, part = setup()
+	local function ground(name, size, cf)
+		part(name, size, cf):AddTag("BuildGuardGround")
+	end
+	-- A shelf 10 up, ending at x = 10 (a 10-stud drop beyond, a span).
+	ground("Shelf_Main", Vector3.new(100, 10, 49), CFrame.new(-40, 5, 15.5))
+	ground("Shelf_South", Vector3.new(100, 10, 25), CFrame.new(-40, 5, -27.5))
+	ground("Shelf_West", Vector3.new(70, 10, 6), CFrame.new(-55, 5, -12))
+	-- A ditch under the road's -Z edge from x -20 to the drop, 1.5 deep,
+	-- its floor falling 0.3 towards the drop.
+	local fall = math.atan(0.3 / 30)
+	ground("Ditch_Floor", Vector3.new(30, 8.35, 6), CFrame.new(-5, 4.175, -12) * CFrame.Angles(0, 0, -fall))
+	-- The road overhangs the drop by 4.
+	local road = part("Road_Shelf", Vector3.new(44, 0.8, W), CFrame.new(-8, 10.4, 0))
+	local gaps = {}
+	for _, issue in checks(BG.scan(root, { world = world }), "gap") do
+		if issue.parts[1] == road then
+			table.insert(gaps, issue)
+		end
+	end
+	expect(#gaps == 1 and gaps[1].value > 1.4 and gaps[1].value < 2, "ditch not reported: " .. #gaps)
+end)

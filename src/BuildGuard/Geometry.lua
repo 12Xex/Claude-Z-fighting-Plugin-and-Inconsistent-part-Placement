@@ -670,6 +670,71 @@ end
 
 Geometry.floatSliver = floatSliver
 
+-- polygonSamples plus a grid over the (convex, planar) polygon at most
+-- `spacing` apart, coarser if that would pass `maxSamples`: enough to find
+-- a hole a terrain tunnel or the gap between two boulders leaves.
+function Geometry.polygonGrid(points, inset, spacing, maxSamples)
+	local samples = Geometry.polygonSamples(points, inset)
+	if #points < 3 then
+		return samples
+	end
+	local n = (points[2] - points[1]):Cross(points[3] - points[1])
+	for i = 4, #points do
+		if n.Magnitude > 1e-9 then
+			break
+		end
+		n = (points[2] - points[1]):Cross(points[i] - points[1])
+	end
+	if n.Magnitude < 1e-9 then
+		return samples
+	end
+	n = n.Unit
+	local u, v = planeBasis(n)
+	local origin = points[1]
+	local flat = project(points, origin, u, v)
+	local u0, u1, v0, v1 = math.huge, -math.huge, math.huge, -math.huge
+	for _, q in flat do
+		u0, u1 = math.min(u0, q[1]), math.max(u1, q[1])
+		v0, v1 = math.min(v0, q[2]), math.max(v1, q[2])
+	end
+	local step = math.max(spacing, math.sqrt((u1 - u0) * (v1 - v0) / math.max(maxSamples, 1)))
+	-- Inside a convex polygon: on the same side of every edge (either winding).
+	local function within(x, y)
+		local sign = 0
+		for i, a in flat do
+			local b = flat[i % #flat + 1]
+			local ex, ey = b[1] - a[1], b[2] - a[2]
+			local cross = ex * (y - a[2]) - ey * (x - a[1])
+			local length = math.sqrt(ex * ex + ey * ey)
+			if length > 1e-9 then
+				local d = cross / length
+				if math.abs(d) < inset then
+					return false
+				end
+				local s = if d > 0 then 1 else -1
+				if sign == 0 then
+					sign = s
+				elseif s ~= sign then
+					return false
+				end
+			end
+		end
+		return true
+	end
+	local x = u0 + step / 2
+	while x < u1 do
+		local y = v0 + step / 2
+		while y < v1 do
+			if within(x, y) then
+				table.insert(samples, origin + u * x + v * y)
+			end
+			y += step
+		end
+		x += step
+	end
+	return samples
+end
+
 --------------------------------------------------------------------------------
 -- Vertices and support points (for convex overlap tests)
 --------------------------------------------------------------------------------

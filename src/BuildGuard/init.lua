@@ -233,6 +233,19 @@ BuildGuard.CHECKS = CHECKS
 -- (see Classify.unclassified); BG.format prints them as one note.
 function BuildGuard.scan(root, options)
 	options = options or {}
+	-- A scan only reads the place: a world that can (the test world) keeps
+	-- what it knows of the parts while it runs.
+	local world = options.world
+	if world and world.steady then
+		return world.steady(function()
+			return BuildGuard.scanNow(root, options)
+		end)
+	end
+	return BuildGuard.scanNow(root, options)
+end
+
+function BuildGuard.scanNow(root, options)
+	options = options or {}
 	local started = Util.clock()
 	local timings = {}
 	local ctx = newContext(root, options)

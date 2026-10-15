@@ -75,6 +75,7 @@ local SpatialHash = require(script.Parent.Parent.SpatialHash)
 local Classify = require(script.Parent.Parent.Classify)
 local Plan = require(script.Parent.Parent.Plan)
 local Util = require(script.Parent.Parent.Util)
+local Kinematics = require(script.Parent.Parent.Kinematics)
 local Meshes = require(script.Parent.Meshes)
 
 local ZFight = {}
@@ -99,8 +100,13 @@ local SEAM_SHARE = 0.5
 -- zFightTolerance plus this clear of the surface it sinks into.
 local SINK_MARGIN = 0.005
 -- Share of a contact's overlap that may stay uncovered (arithmetic rounding;
--- Geometry.overlapCover already allows for float32 positions).
+-- Geometry.overlapCover already allows for float32 positions), and never
+-- more than zFightMinOverlapArea of it.
 local COVER_SLACK = 1e-6
+-- What's left open of a covered overlap is sampled this far apart (under
+-- Studio's 4-stud terrain voxels), up to this many samples per piece.
+local OPEN_SPACING = 2
+local OPEN_SAMPLES = 256
 -- Above this many cover faces near a pair, index them.
 local BRUTE_FORCE_COVERS = 16
 -- More distinct contact planes than this in one pair (a curved mesh): take
@@ -555,12 +561,36 @@ function ZFight.scan(ctx)
 
 	-- What can hide a contact: opaque candidates, not meshes (their
 	-- triangles aren't read for it).
+	-- Only parts that stay put hide anything: a loose crate or a parked
+	-- cart moves off it. A part counts when it, or a part rigidly joined to
+	-- it, is anchored, and it isn't part of a vehicle.
+	local anchoredAssembly, assemblyOf = nil, nil
+	local function staysPut(part)
+		if Util.prop(part, "Anchored", true) or not ctx.graph then
+			return true
+		end
+		if not anchoredAssembly then
+			anchoredAssembly = {}
+			local assemblies = Kinematics.assemblies(ctx.graph())
+			assemblyOf = assemblies.of
+			for p, id in assemblyOf do
+				if Util.prop(p, "Anchored", true) then
+					anchoredAssembly[id] = true
+				end
+			end
+		end
+		local id = assemblyOf[part]
+		return id ~= nil and anchoredAssembly[id] == true
+	end
+	local function inVehicle(part)
+		return ctx.vehicleOf ~= nil and ctx.vehicleOf(part) ~= nil
+	end
 	local hiding = {}
 	local function hides(k)
 		local h = hiding[k]
 		if h == nil then
 			local s = candidates[k]
-			h = opaque(s.part) and not isMeshLike(s)
+			h = opaque(s.part) and not isMeshLike(s) and not inVehicle(s.part) and staysPut(s.part)
 			hiding[k] = h
 		end
 		return h
@@ -638,9 +668,12 @@ function ZFight.scan(ctx)
 		local x, y, z, nx, ny, nz = p.X, p.Y, p.Z, n.X, n.Y, n.Z
 		local ax, ay, az = x + nx * depth, y + ny * depth, z + nz * depth
 		local bx, by, bz = x + nx * coverMargin, y + ny * coverMargin, z + nz * coverMargin
-		local x0, x1 = math.min(ax, bx), math.max(ax, bx)
-		local y0, y1 = math.min(ay, by), math.max(ay, by)
-		local z0, z1 = math.min(az, bz), math.max(az, bz)
+		-- Grown by the float sliver, as overlapCover grows covers: a hairline
+		-- joint between two covers still counts as covered.
+		local grow = Geometry.floatSliver(p)
+		local x0, x1 = math.min(ax, bx) - grow, math.max(ax, bx) + grow
+		local y0, y1 = math.min(ay, by) - grow, math.max(ay, by) + grow
+		local z0, z1 = math.min(az, bz) - grow, math.max(az, bz) + grow
 		for _, s in solids do
 			local b = boxOf(s)
 			if b[1] <= x1 and x0 <= b[4] and b[2] <= y1 and y0 <= b[5] and b[3] <= z1 and z0 <= b[6] then
@@ -828,37 +861,43 @@ function ZFight.scan(ctx)
 				end
 			end
 		end
+		local sections = {}
 		for _, s in solids do
 			worked()
 			local section = Geometry.heldSection(s, fa.center, fa.normal, depth)
 			if section then
-				table.insert(matched, { points = section })
+				table.insert(sections, { points = section })
 			end
 		end
-		if #matched > BRUTE_FORCE_COVERS then
-			-- Many small covers (crates on a slab) whose areas, grown as
-			-- overlapCover grows them, add up to less than the overlap can't
-			-- cover it: skip their union, and test the whole overlap below.
-			local grow = Geometry.floatSliver(fa.center)
-			local most = 0
-			for _, f in matched do
+		local grow = Geometry.floatSliver(fa.center)
+		local function most(list)
+			local sum = 0
+			for _, f in list do
 				worked()
 				local surface, perimeter = faceSize(f)
-				most += surface + perimeter * grow + 8 * #f.points * grow * grow
+				sum += surface + perimeter * grow + 8 * #f.points * grow * grow
 			end
-			if most < c.area * (1 - COVER_SLACK) then
-				matched = NO_FACES
-			end
+			return sum
 		end
+		if #matched > BRUTE_FORCE_COVERS and most(matched) + most(sections) < c.area * (1 - COVER_SLACK) then
+			-- Many small covers (crates on a slab) that, with what the parts
+			-- holding it cover, add up to less than the overlap can't cover
+			-- it: skip their union; the held sections still count.
+			matched = {}
+		end
+		table.move(sections, 1, #sections, #matched + 1, matched)
 		local covered, total, open = Geometry.overlapCover(fa, fb, matched)
 		if total <= 0 then
 			return false
-		elseif total - covered <= total * COVER_SLACK then
+		elseif total - covered <= math.min(total * COVER_SLACK, minArea) then
 			return true
 		end
-		local inset = 2 * Geometry.floatSliver(fa.center)
+		-- What's left open must be deep in terrain or round parts all over:
+		-- sampled on a grid, so a tunnel under it or the gap between two
+		-- boulders shows.
+		local inset = 2 * grow
 		for _, piece in open do
-			if not held(Geometry.polygonSamples(piece, inset), solids, fa.normal) then
+			if not held(Geometry.polygonGrid(piece, inset, OPEN_SPACING, OPEN_SAMPLES), solids, fa.normal) then
 				return false
 			end
 		end

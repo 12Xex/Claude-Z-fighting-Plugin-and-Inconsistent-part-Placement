@@ -318,7 +318,9 @@ end
 -- Samples this close (studs) across an edge lie in the same row along it.
 local SAME_ROW = 0.05
 -- A bank's gap falls by more than this from one sample to the next.
-local BANK_FALL = 1e-3
+-- A bank falls at least this much per stud along the edge (about 6°): a
+-- ditch that only drains towards a drop isn't one.
+local BANK_SLOPE = 0.1
 
 -- Marks in `dropped` the spans in `row` (sample indexes in order along an
 -- edge, their gaps in `found`): each sample deeper than `step` (or with
@@ -330,10 +332,15 @@ local function dropSpans(row, found, limit, step, dropped)
 		if found[i].gap > step then
 			dropped[i] = true
 			for _, dir in { -1, 1 } do
-				local n, last = k + dir, found[i].gap
-				while row[n] and found[row[n]].gap > limit and found[row[n]].gap < last - BANK_FALL do
+				local n, last, lastAlong = k + dir, found[i].gap, found[i].along
+				while row[n] do
+					local f = found[row[n]]
+					local run = math.max(math.abs(f.along - lastAlong), 1e-3)
+					if f.gap <= limit or last - f.gap < BANK_SLOPE * run then
+						break
+					end
 					dropped[row[n]] = true
-					last = found[row[n]].gap
+					last, lastAlong = f.gap, f.along
 					n += dir
 				end
 			end

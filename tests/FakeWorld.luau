@@ -28,7 +28,14 @@ function FakeWorld.new(root, Geometry)
 	local function cellRange(min, max)
 		return math.floor(min.X / CELL), math.floor(min.Z / CELL), math.floor(max.X / CELL), math.floor(max.Z / CELL)
 	end
+	-- While `steady` runs a read-only job (a scan), the parts can't change,
+	-- so they're gathered once instead of on every query.
+	local steadyDepth, fresh0 = 0, false
 	local function refresh()
+		if steadyDepth > 0 and fresh0 then
+			return
+		end
+		fresh0 = steadyDepth > 0
 		local fresh, changed = {}, false
 		for _, d in root:GetDescendants() do
 			local partLike = isPart[d]
@@ -65,6 +72,19 @@ function FakeWorld.new(root, Geometry)
 		end
 	end
 	-- The solids whose boxes may touch the box min..max, in child order.
+	function self.steady(fn)
+		steadyDepth += 1
+		if steadyDepth == 1 then
+			fresh0 = false
+		end
+		local results = table.pack(pcall(fn))
+		steadyDepth -= 1
+		if not results[1] then
+			error(results[2], 0)
+		end
+		return table.unpack(results, 2, results.n)
+	end
+
 	local function near(min, max)
 		refresh()
 		local x0, z0, x1, z1 = cellRange(min, max)

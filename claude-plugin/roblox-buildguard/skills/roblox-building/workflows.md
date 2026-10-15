@@ -128,7 +128,7 @@ local BG = require(game.ServerStorage.BuildGuard)
 
 1. Carve the river channel, then fill it with `Enum.Material.Water`.
 2. **Snapping ignores water.** A road over a river with nothing under it but water would snap down onto the riverbed. Build the bridge's supports (abutments or pillars) first. Snapping rests a road on the highest ground under it, so it sits on them. Then snap the bridge road and check it.
-3. Where a road's edge runs more than 4 studs (`connectMaxStep`) above what's under it, that stretch is a span, not a gap, and so are the banks sloping up out of it. A level dip that runs up to the drop still counts, and so does the rest of the edge, so a bridge end resting on a bank still gets `gap` warnings where it hangs over dips there: put footings under it. Over water the gap is measured to the water's surface (`gap above the water`), so a deck less than 4 studs above the water gets `gap` warnings: set `maxHover` on the bridge's model, with a reason:
+3. Where a road's edge runs more than 4 studs (`connectMaxStep`) above what's under it, that stretch is a span, not a gap, and so are the banks sloping up out of it (falling at least 0.1 stud per stud). A level dip, or a ditch draining gently towards the drop, still counts, and so does the rest of the edge, so a bridge end resting on a bank still gets `gap` warnings where it hangs over dips there: put footings under it. Over water the gap is measured to the water's surface (`gap above the water`), so a deck less than 4 studs above the water gets `gap` warnings: set `maxHover` on the bridge's model, with a reason:
    ```lua
    BG.setConfig(workspace.Map.CreekBridge, { maxHover = 3 }, "low bridge deck over the creek")
    return BG.check(workspace.Map.CreekBridge)
