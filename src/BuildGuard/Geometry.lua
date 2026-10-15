@@ -417,6 +417,24 @@ function Geometry.coplanarOverlap(fa, fb, tolerance, minArea)
 	return area, distance, fa.center + u * cx + v * cy, Geometry.polygonWidth(clipped)
 end
 
+local function toWorld(poly, origin, u, v)
+	local points = table.create(#poly)
+	for i, p in poly do
+		points[i] = origin + u * p[1] + v * p[2]
+	end
+	return points
+end
+
+-- The overlap of faces `fa` and `fb` (as coplanarOverlap finds it) as world
+-- points on fa's plane: a convex polygon, empty when they don't overlap.
+function Geometry.overlapPolygon(fa, fb)
+	local overlap, _, _, u, v = overlapOnPlane(fa, fb)
+	if #overlap < 3 then
+		return {}
+	end
+	return toWorld(overlap, fa.center, u, v)
+end
+
 -- A convex polygon grown by `d`: each edge moved out by d. Corners sharper
 -- than about 30° are cut off rather than drawn out to a long point.
 local function grownPolygon(poly, d)
@@ -449,31 +467,208 @@ local function grownPolygon(poly, d)
 	return out
 end
 
+-- Convex `poly` split by the line through a and b: the part left of a -> b
+-- (inside a counter-clockwise polygon with that edge) and the part right.
+local function splitPolygon(poly, a, b)
+	local dx, dy = b[1] - a[1], b[2] - a[2]
+	local left, right = {}, {}
+	local prev = poly[#poly]
+	local prevSide = dx * (prev[2] - a[2]) - dy * (prev[1] - a[1])
+	for _, cur in poly do
+		local side = dx * (cur[2] - a[2]) - dy * (cur[1] - a[1])
+		if (side >= 0) ~= (prevSide >= 0) then
+			local t = prevSide / (prevSide - side)
+			local cut = { prev[1] + t * (cur[1] - prev[1]), prev[2] + t * (cur[2] - prev[2]) }
+			table.insert(left, cut)
+			table.insert(right, cut)
+		end
+		table.insert(if side >= 0 then left else right, cur)
+		prev, prevSide = cur, side
+	end
+	return left, right
+end
+
+local function polygonBounds(poly)
+	local x0, y0, x1, y1 = math.huge, math.huge, -math.huge, -math.huge
+	for _, p in poly do
+		x0, y0, x1, y1 = math.min(x0, p[1]), math.min(y0, p[2]), math.max(x1, p[1]), math.max(y1, p[2])
+	end
+	return x0, y0, x1, y1
+end
+
+-- Open pieces smaller than this (studs²) are float rounding along a cut.
+local MIN_PIECE_AREA = 1e-9
+-- Cutting stops once the open part is in this many pieces (thousands of
+-- small covers over a huge overlap); what's left then counts as open.
+local MAX_OPEN_PIECES = 512
+
 -- How much of the overlap of same-facing faces `fa` and `fb` (as
 -- coplanarOverlap finds it) the faces `covers` hide: faces pointing the
--- other way that lie on it, back to back (a road resting on both). Each
--- cover is grown by the float rounding coplanarOverlap ignores, so one built
--- flush with the overlap's edges covers all of it, far from the origin too.
--- Covers that overlap each other count twice; the sum is capped at the
--- overlap. Returns coveredArea, overlapArea (0, 0 without an overlap).
+-- other way that lie on it, back to back (a road resting on both). The
+-- covered part is the union of the covers: the open part is kept as convex
+-- pieces and each cover is cut out of them in turn, so covers overlapping
+-- each other count once. Each cover is grown by the float rounding
+-- coplanarOverlap ignores, so one built flush with the overlap's edges (or
+-- with the next cover's) covers all of it, far from the origin too.
+-- Returns coveredArea, overlapArea, open: the pieces left open, each a
+-- convex polygon of world points on fa's plane (0, 0, {} without an
+-- overlap).
 function Geometry.overlapCover(fa, fb, covers)
 	local overlap, _, _, u, v = overlapOnPlane(fa, fb)
 	if #overlap < 3 then
-		return 0, 0
+		return 0, 0, {}
 	end
 	local area = Geometry.polygonArea(overlap)
 	local grow = floatSliver(fa.center)
-	local covered = 0
+	local open = { counterClockwise(overlap) }
 	for _, f in covers do
+		if #open == 0 or #open > MAX_OPEN_PIECES then
+			break
+		end
 		-- A face pointing the other way winds the other way round once
 		-- projected on fa's plane; grownPolygon turns it counter-clockwise.
-		local inside = Geometry.clipPolygon(overlap, grownPolygon(project(f.points, fa.center, u, v), grow))
-		if #inside >= 3 then
-			covered += Geometry.polygonArea(inside)
+		local cut = grownPolygon(project(f.points, fa.center, u, v), grow)
+		local cx0, cy0, cx1, cy1 = polygonBounds(cut)
+		local rest = {}
+		for _, piece in open do
+			local x0, y0, x1, y1 = polygonBounds(piece)
+			if x0 >= cx1 or cx0 >= x1 or y0 >= cy1 or cy0 >= y1 then
+				table.insert(rest, piece)
+				continue
+			end
+			-- What lies right of one of the cut's edges stays open; what's
+			-- left of every edge is covered.
+			local inside = piece
+			for i = 1, #cut do
+				local outside
+				inside, outside = splitPolygon(inside, cut[i], cut[i % #cut + 1])
+				if #outside >= 3 and Geometry.polygonArea(outside) > MIN_PIECE_AREA then
+					table.insert(rest, outside)
+				end
+				if #inside < 3 then
+					break
+				end
+			end
+		end
+		open = rest
+	end
+	local left = 0
+	local pieces = table.create(#open)
+	for k, piece in open do
+		left += Geometry.polygonArea(piece)
+		pieces[k] = toWorld(piece, fa.center, u, v)
+	end
+	return math.max(area - left, 0), area, pieces
+end
+
+-- Convex hull of 2D points, counter-clockwise (Andrew's monotone chain).
+local function convexHull(points)
+	table.sort(points, function(a, b)
+		return a[1] < b[1] or (a[1] == b[1] and a[2] < b[2])
+	end)
+	local function turn(o, a, b)
+		return (a[1] - o[1]) * (b[2] - o[2]) - (a[2] - o[2]) * (b[1] - o[1])
+	end
+	local lower, upper = {}, {}
+	for _, p in points do
+		while #lower >= 2 and turn(lower[#lower - 1], lower[#lower], p) <= 1e-12 do
+			table.remove(lower)
+		end
+		table.insert(lower, p)
+	end
+	for i = #points, 1, -1 do
+		local p = points[i]
+		while #upper >= 2 and turn(upper[#upper - 1], upper[#upper], p) <= 1e-12 do
+			table.remove(upper)
+		end
+		table.insert(upper, p)
+	end
+	table.remove(lower)
+	table.remove(upper)
+	for _, p in upper do
+		table.insert(lower, p)
+	end
+	return lower
+end
+
+-- Where the plane through `at` (normal `n`) cuts the convex hull of
+-- `vertices`: a convex polygon in the basis u, v around `origin`, or nil.
+local function section(vertices, at, n, origin, u, v)
+	local side = table.create(#vertices)
+	for k, p in vertices do
+		side[k] = (p - at):Dot(n)
+	end
+	local points = {}
+	local function add(p)
+		local r = p - origin
+		table.insert(points, { r:Dot(u), r:Dot(v) })
+	end
+	for a, p in vertices do
+		if side[a] == 0 then
+			add(p)
+		end
+		for b = a + 1, #vertices do
+			if side[a] ~= 0 and side[b] ~= 0 and (side[a] < 0) ~= (side[b] < 0) then
+				add(p + (vertices[b] - p) * (side[a] / (side[a] - side[b])))
+			end
 		end
 	end
-	return math.min(covered, area), area
+	if #points < 3 then
+		return nil
+	end
+	local hull = convexHull(points)
+	return if #hull >= 3 then hull else nil
 end
+
+-- The part of the plane through `at` (normal `n`) that the block or wedge
+-- `s` holds from `depth` behind the plane to `depth` in front: a convex
+-- polygon of world points on the plane, or nil (also for round shapes and
+-- meshes, whose sections aren't polygons).
+function Geometry.heldSection(s, at, n, depth)
+	if s.shape ~= "Block" and s.shape ~= "Wedge" and s.shape ~= "CornerWedge" then
+		return nil
+	end
+	-- Its box has to reach past both: parts resting on the plane don't.
+	local middle = (s.pos - at):Dot(n)
+	local h, axes = s.half, s.axes
+	local extent = math.abs(axes[1]:Dot(n)) * h.X + math.abs(axes[2]:Dot(n)) * h.Y + math.abs(axes[3]:Dot(n)) * h.Z
+	if middle - extent > -depth or middle + extent < depth then
+		return nil
+	end
+	local vertices = Geometry.vertices(s)
+	local u, v = planeBasis(n)
+	local back = section(vertices, at - n * depth, n, at, u, v)
+	local front = back and section(vertices, at + n * depth, n, at, u, v)
+	if not front then
+		return nil
+	end
+	local both = Geometry.clipPolygon(front, back)
+	if #both < 3 then
+		return nil
+	end
+	return toWorld(both, at, u, v)
+end
+
+-- Points to test whether a convex polygon (world points) is inside
+-- something: its corners pulled `inset` studs toward its middle (at most
+-- halfway), then the middle.
+function Geometry.polygonSamples(points, inset)
+	local middle = Vector3.zero
+	for _, p in points do
+		middle += p
+	end
+	middle /= #points
+	local samples = table.create(#points + 1)
+	for i, p in points do
+		local toward = middle - p
+		local length = toward.Magnitude
+		samples[i] = if length > 1e-9 then p + toward * math.min(inset / length, 0.5) else p
+	end
+	table.insert(samples, middle)
+	return samples
+end
+
+Geometry.floatSliver = floatSliver
 
 --------------------------------------------------------------------------------
 -- Vertices and support points (for convex overlap tests)

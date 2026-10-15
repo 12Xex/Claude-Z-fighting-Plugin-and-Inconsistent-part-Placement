@@ -956,7 +956,7 @@ test("covered contacts: a contact covered only in part, or by a part that doesn'
 	end
 end)
 
-test("covered contacts: Geometry.overlapCover sums what faces pointing the other way cover, capped at the overlap", function()
+test("covered contacts: Geometry.overlapCover finds the union faces pointing the other way cover, and what they leave open", function()
 	local G = BG.Geometry
 	local function top(s)
 		for _, f in G.faces(s) do
@@ -988,7 +988,26 @@ test("covered contacts: Geometry.overlapCover sums what faces pointing the other
 	near(covered, 8, 1e-4, "crate B covers x 2..4")
 	local wide = G.solidFrom(frame * CFrame.new(2, 1, 0), Vector3.new(6, 2, 6), "Block")
 	covered = G.overlapCover(top(slab), top(inlay), { bottom(crateA), bottom(wide) })
-	near(covered, 8, 1e-4, "covers overlapping each other: their sum is capped at the overlap")
+	near(covered, 8, 1e-4, "covers overlapping each other")
+	-- Covers overlapping each other count once: their sum (8.006) would hide x 3..4.
+	covered = G.overlapCover(top(slab), top(inlay), { bottom(crateA), bottom(crateA) })
+	near(covered, 4.002, 1e-4, "the same cover twice")
+	local mid = G.solidFrom(frame * CFrame.new(2, 1, 0), Vector3.new(2, 2, 6), "Block")
+	local open
+	covered, area, open = G.overlapCover(top(slab), top(inlay), { bottom(crateA), bottom(mid) })
+	near(covered, 6.002, 1e-4, "crate A and a crate over x 1..3: their union")
+	local left = 0
+	for _, piece in open do
+		expect(#piece >= 3, "pieces are polygons")
+		for _, p in piece do
+			near(frame:PointToObjectSpace(p).Y, 0, 1e-4, "on the overlap's plane")
+			expect(frame:PointToObjectSpace(p).X >= 3 - 1e-3, "only x 3..4 is open")
+		end
+		for i = 3, #piece do
+			left += (piece[i - 1] - piece[1]):Cross(piece[i] - piece[1]).Magnitude / 2
+		end
+	end
+	near(left, area - covered, 1e-4, "the open pieces' area")
 	-- A cover flush with the overlap's edges but for float rounding covers all of it.
 	local flush = G.solidFrom(frame * CFrame.new(2.0004, 1, -0.0003), Vector3.new(3.9995, 2, 1.9996), "Block")
 	covered = G.overlapCover(top(slab), top(inlay), { bottom(flush) })
@@ -996,6 +1015,246 @@ test("covered contacts: Geometry.overlapCover sums what faces pointing the other
 	local away = G.solidFrom(frame * CFrame.new(20, -0.25, 0), Vector3.new(4, 0.5, 2), "Block")
 	covered, area = G.overlapCover(top(slab), top(away), { bottom(crateA) })
 	expect(covered == 0 and area == 0, "no overlap")
+end)
+
+test("covered contacts: Geometry.heldSection is the part of a plane a block or wedge holds on both sides", function()
+	local G = BG.Geometry
+	local function area(points)
+		local total = 0
+		for i = 3, #points do
+			total += (points[i - 1] - points[1]):Cross(points[i] - points[1]).Magnitude / 2
+		end
+		return total
+	end
+	local frame = CFrame.new(-7, 3, 11) * CFrame.Angles(0, math.rad(30), 0)
+	local up = frame.UpVector
+	-- A 4 x 2 x 6 block through the plane: its 4 x 6 footprint.
+	local block = G.solidFrom(frame * CFrame.new(1, 0.5, 0), Vector3.new(4, 2, 6), "Block")
+	local held = G.heldSection(block, frame.Position, up, 0.005)
+	expect(held, "a block through the plane")
+	near(area(held), 24, 1e-3, "its footprint")
+	for _, p in held do
+		near(frame:PointToObjectSpace(p).Y, 0, 1e-4, "on the plane")
+	end
+	-- Resting on the plane, or ending just past it: nothing.
+	local resting = G.solidFrom(frame * CFrame.new(1, 1, 0), Vector3.new(4, 2, 6), "Block")
+	expect(G.heldSection(resting, frame.Position, up, 0.005) == nil, "resting on it")
+	local shallow = G.solidFrom(frame * CFrame.new(1, 0.998, 0), Vector3.new(4, 2, 6), "Block")
+	expect(G.heldSection(shallow, frame.Position, up, 0.005) == nil, "0.002 into it")
+	-- A wedge 4 high and 4 deep through the plane at half its height: its
+	-- slope cuts the 4 x 4 footprint in half.
+	local wedge = G.solidFrom(frame * CFrame.new(0, 0, 0), Vector3.new(4, 4, 4), "Wedge")
+	held = G.heldSection(wedge, frame.Position, up, 0.005)
+	near(area(held), 8, 0.05, "half the wedge's footprint")
+	expect(G.heldSection(G.solidFrom(frame, Vector3.new(4, 4, 4), "Ball"), frame.Position, up, 0.005) == nil, "round shapes have no polygon")
+end)
+
+test("covered contacts: covers overlapping each other or laid end to end don't hide the part of an overlap they leave open", function()
+	-- A footing 1 stud longer than its road: 22 studs² of its top, flush
+	-- with the pad's, is open to the sky past the road's end. Shoulders
+	-- along both sides overlap the road by 1 stud.
+	local root, world, part = setup()
+	local pad = part("Ground_Yard", Vector3.new(60, 1.2, 40), CFrame.new(0, 0.6, 0))
+	part("Road_West", Vector3.new(28, 0.8, 22), CFrame.new(0, 1.6, 0))
+	local f = part("Footing_Road_West", Vector3.new(29, 4, 22), CFrame.new(0.5, 1.2 - 2, 0))
+	for _, side in { -1, 1 } do
+		part("Shoulder", Vector3.new(26.5, 0.6, 3), CFrame.new(-0.25, 1.5, side * 11.5))
+	end
+	local report = BG.scan(root, { world = world })
+	local issue = involves(checks(report, "zfight"), f, pad)
+	expect(issue and string.find(issue.message, "Top/Top face(s) overlap 638.00 studs²", 1, true), BG.format(report))
+	-- The shoulders' bottoms where they overlap the road are on the footing: hidden.
+	expect(#checks(report, "zfight") == 1, BG.format(report))
+
+	-- The road in two pieces overlapping by 4, the footing 2 studs past its end.
+	root, world, part = setup()
+	pad = part("Ground_Yard", Vector3.new(60, 1.2, 40), CFrame.new(0, 0.6, 0))
+	part("Road_West_A", Vector3.new(16, 0.8, 22), CFrame.new(-6, 1.6, 0))
+	part("Road_West_B", Vector3.new(16, 0.8, 22), CFrame.new(6, 1.6, 0))
+	f = part("Footing_Road_West", Vector3.new(30, 4, 22), CFrame.new(1, 1.2 - 2, 0))
+	report = BG.scan(root, { world = world })
+	expect(involves(checks(report, "zfight"), f, pad), BG.format(report))
+
+	-- Ten pieces end to end far out, where each cover is grown by about
+	-- 0.012 for float rounding: the footing 0.1 or 0.2 past the last one's
+	-- end still shows. Flush with it, the joints don't leave anything open.
+	local at = CFrame.new(24576, 0, -24576)
+	for _, past in { 0.1, 0.2, 0 } do
+		root, world, part = setup()
+		part("Ground", Vector3.new(400, 2, 400), at * CFrame.new(0, -1, 0))
+		pad = part("Ground_Yard", Vector3.new(80, 1.2, 40), at * CFrame.new(0, 0.6, 0))
+		for i = 0, 9 do
+			part("Road_Piece", Vector3.new(4, 0.8, 22), at * CFrame.new(-18 + i * 4, 1.6, 0))
+		end
+		f = part("Footing_Run", Vector3.new(40 + past, 4, 22), at * CFrame.new(past / 2, 1.2 - 2, 0))
+		report = BG.scan(root, { world = world })
+		issue = involves(checks(report, "zfight"), f, pad)
+		if past > 0 then
+			expect(issue, ("%.1f past the end: %s"):format(past, BG.format(report)))
+		else
+			expect(not involves(report.issues, f), "flush with the end: " .. BG.format(report))
+		end
+	end
+end)
+
+test("covered contacts: only opaque parts hide a contact (not glass, a see-through part or a force field)", function()
+	-- An inlay flush in a deck's top with a panel resting on it.
+	local function scene(material, transparency)
+		local root, world, part = setup()
+		local deck = part("Deck", Vector3.new(20, 1, 20), CFrame.new(0, 0.5, 0))
+		local inlay = part("Inlay", Vector3.new(6, 0.1, 2), CFrame.new(0, 0.95, 0))
+		local panel = part("Panel", Vector3.new(8, 0.2, 4), CFrame.new(0, 1.1, 0))
+		panel.Material = Enum.Material[material]
+		panel.Transparency = transparency
+		return BG.scan(root, { world = world }), deck, inlay
+	end
+	for _, case in { { "Glass", 0.5 }, { "Glass", 0 }, { "Plastic", 0.5 }, { "Plastic", 0.1 }, { "ForceField", 0 } } do
+		local report, deck, inlay = scene(case[1], case[2])
+		local issue = involves(checks(report, "zfight"), deck, inlay)
+		local label = ("%s at Transparency %g"):format(case[1], case[2])
+		expect(issue and string.find(issue.message, "Top/Top face(s) overlap 12.00 studs²", 1, true), label .. ": " .. BG.format(report))
+	end
+	-- An opaque crate hides it.
+	for _, transparency in { 0, 0.05 } do
+		local report, _, inlay = scene("Wood", transparency)
+		expect(not involves(report.issues, inlay), BG.format(report))
+	end
+
+	-- A see-through road doesn't hide a part sunk into it: two equal
+	-- layer-0 plates grow past both faces instead of sinking.
+	local root, world, part = setup()
+	local road = part("Road_Main", Vector3.new(60, 0.8, 22), CFrame.new(0, 0.4, 0))
+	road.Transparency = 0.5
+	BG.Layers.place(part("Washboard_Rib", Vector3.new(8, 0.22, 0.6), CFrame.new()), road, { layer = 0, u = 5, rotation = 90 })
+	BG.Layers.place(part("Plate", Vector3.new(2, 0.22, 2), CFrame.new()), road, { layer = 0, u = 5 })
+	local plan = BG.planFixes(BG.scan(root, { world = world }))
+	expect(#plan.items == 1 and string.find(plan.items[1].reason, "grow past both faces", 1, true), BG.Plan.describe(plan))
+end)
+
+test("covered contacts: a contact sunk inside an opaque part is hidden, unless part of it is outside", function()
+	-- A footing a little narrower than its road, the road sunk 0.05 into it
+	-- and the pad: their flush tops are inside the road.
+	local root, world, part = setup()
+	local pad = part("Ground_Yard", Vector3.new(40, 1.2, 40), CFrame.new(-10, 0.6, 0))
+	local f = part("Footing", Vector3.new(27, 4, 21), CFrame.new(0, 1.2 - 2, 0))
+	part("Road_West", Vector3.new(28, 0.8, 22), CFrame.new(0, 1.55, 0))
+	local report = BG.scan(root, { world = world })
+	expect(not involves(checks(report, "zfight"), f, pad), BG.format(report))
+	-- The footing and pad both a stud past the road's ends.
+	root, world, part = setup()
+	pad = part("Ground_Yard", Vector3.new(60, 1.2, 40), CFrame.new(0, 0.6, 0))
+	f = part("Footing", Vector3.new(30, 4, 21), CFrame.new(0, 1.2 - 2, 0))
+	part("Road_West", Vector3.new(28, 0.8, 22), CFrame.new(0, 1.55, 0))
+	report = BG.scan(root, { world = world })
+	expect(involves(checks(report, "zfight"), f, pad), BG.format(report))
+	-- An inlay held by two blocks sunk into the deck: hidden when they
+	-- meet, not when a stud between them shows (even though its corners and
+	-- middle are all held).
+	for _, gap in { 1, 0 } do
+		root, world, part = setup()
+		local deck = part("Deck", Vector3.new(20, 1, 20), CFrame.new(0, 0.5, 0))
+		local inlay = part("Inlay", Vector3.new(10, 0.1, 2), CFrame.new(0, 0.95, 0))
+		part("BlockA", Vector3.new(6, 0.6, 3), CFrame.new(-2, 1.2, 0))
+		part("BlockB", Vector3.new(4 - gap, 0.6, 3), CFrame.new(3 + gap / 2, 1.2, 0))
+		report = BG.scan(root, { world = world })
+		local issue = involves(checks(report, "zfight"), deck, inlay)
+		expect((issue ~= nil) == (gap > 0), ("gap %d: %s"):format(gap, BG.format(report)))
+	end
+	-- A crate resting on half of an inlay and the deck under it don't hide
+	-- the other half (only their faces would, and they don't reach).
+	root, world, part = setup()
+	local deck = part("Deck", Vector3.new(20, 1, 20), CFrame.new(0, 0.5, 0))
+	local inlay = part("Inlay", Vector3.new(6, 0.1, 2), CFrame.new(0, 0.95, 0))
+	part("Crate", Vector3.new(3, 3, 3), CFrame.new(-1.5, 2.5, 0))
+	report = BG.scan(root, { world = world })
+	expect(involves(checks(report, "zfight"), deck, inlay), BG.format(report))
+end)
+
+test("covered contacts: a cover lifted by the face gap (as a fix leaves it) still hides the contact", function()
+	for _, case in { { raise = D.zFightNudge, hidden = true }, { raise = 0.05, hidden = false } } do
+		local root, world, part = setup()
+		local pad, roads = footingThroughPad(part, CFrame.new())
+		local f = footing(roads[1], 4)
+		roads[1].CFrame += Vector3.new(0, case.raise, 0)
+		local report = BG.scan(root, { world = world })
+		local issue = involves(checks(report, "zfight"), f, pad)
+		expect((issue == nil) == case.hidden, ("road %.2f up: %s"):format(case.raise, BG.format(report)))
+	end
+end)
+
+test("covered contacts: a road running flush onto a plaza, on its footing through a pad, is fixed in one pass in either creation order; the footing never moves", function()
+	for _, padFirst in { true, false } do
+		local label = if padFirst then "pad first" else "footing first"
+		local root, world, part = setup()
+		local f
+		local function addFooting()
+			f = part("Footing_Road_West", Vector3.new(28, 4, 22), CFrame.new(0, 1.2 - 2, 0))
+		end
+		if not padFirst then
+			addFooting()
+		end
+		part("Ground_Yard", Vector3.new(40, 1.2, 40), CFrame.new(-10, 0.6, 0))
+		if padFirst then
+			addFooting()
+		end
+		local road = part("Road_West", Vector3.new(28, 0.8, 22), CFrame.new(0, 1.6, 0))
+		-- Its top flush with the road's over the road's last 4 studs.
+		local plaza = part("PlazaDeck", Vector3.new(40, 0.5, 40), CFrame.new(30, 1.75, 0))
+		local footingAt, footingSize, roadSize = f.CFrame, f.Size, road.Size
+		local report = BG.scan(root, { world = world })
+		local z = checks(report, "zfight")
+		expect(#z == 1 and involves(z, road, plaza), label .. ": " .. BG.format(report))
+		local result = BG.fixAll(root, { world = world })
+		expect(#result.plans == 1, ("%s: %d passes\n%s"):format(label, #result.plans, BG.format(result.report)))
+		report = result.report
+		expect(report.counts.error == 0 and report.counts.warning == 0, label .. ": " .. BG.format(report))
+		expect(f.CFrame == footingAt and f.Size == footingSize, label .. ": the footing moved")
+		expect(road.Size == roadSize, label .. ": the road was resized")
+		expect(road.CFrame.Position.Y - 0.4 >= 1.2 - 1e-4, label .. ": the road sank into its footing")
+	end
+end)
+
+test("covered contacts: overlapping footings buried in the ground are clean and never moved; their sides over a dip z-fight", function()
+	local function scene(dip)
+		local root, world, part = setup()
+		local ground = root:FindFirstChild("Ground")
+		if dip then
+			-- The ground drops to 6 below in front of the footings' Front sides.
+			ground.Size, ground.CFrame = Vector3.new(400, 20, 211), CFrame.new(0, -10, 94.5)
+			part("Ground_Low", Vector3.new(400, 14, 189), CFrame.new(0, -13, -105.5))
+		else
+			ground.Size, ground.CFrame = Vector3.new(400, 20, 400), CFrame.new(0, -10, 0)
+		end
+		-- Two road pieces overlapping by 4, each with the docs' footing.
+		local a = part("Road_A", Vector3.new(22, 0.8, 22), CFrame.new(-9, 0.4, 0))
+		local b = part("Road_B", Vector3.new(22, 0.6, 22), CFrame.new(9, 0.3, 0))
+		return root, world, footing(a, 4), footing(b, 4)
+	end
+	local root, world, fa, fb = scene(false)
+	local report = BG.scan(root, { world = world })
+	expect(not involves(report.issues, fa) and not involves(report.issues, fb), BG.format(report))
+	local was = { fa.CFrame, fa.Size, fb.CFrame, fb.Size }
+	BG.fixAll(root, { world = world })
+	expect(fa.CFrame == was[1] and fa.Size == was[2] and fb.CFrame == was[3] and fb.Size == was[4], "a footing moved")
+
+	root, world, fa, fb = scene(true)
+	report = BG.scan(root, { world = world })
+	local issue = involves(checks(report, "zfight"), fa, fb)
+	expect(issue and string.find(issue.message, "Front/Front face(s) overlap 16.00 studs²", 1, true), BG.format(report))
+
+	-- In ground made of two slabs meeting under them, and in terrain.
+	root, world, fa, fb = scene(false)
+	local ground = root:FindFirstChild("Ground")
+	ground.Size, ground.CFrame = Vector3.new(200, 20, 400), CFrame.new(-100, -10, 0)
+	local east = ground:Clone()
+	east.CFrame = CFrame.new(100, -10, 0)
+	east.Parent = root
+	report = BG.scan(root, { world = world })
+	expect(not involves(report.issues, fa) and not involves(report.issues, fb), "two slabs: " .. BG.format(report))
+	ground.Parent, east.Parent = nil, nil
+	world.fillTerrain(CFrame.new(0, -10, 0), Vector3.new(400, 20, 400), "Grass")
+	report = BG.scan(root, { world = world })
+	expect(not involves(checks(report, "zfight"), fa, fb), "terrain: " .. BG.format(report))
 end)
 
 T.section("Seams")
@@ -1208,4 +1467,57 @@ test("long z-fight work yields as it goes: one slab under hundreds of crates, tw
 	world.setMeshTriangles(b, boxTriangles(b.Size, false, 12))
 	counts = yieldsPerStage(root, world)
 	expect((counts.zfight or 0) >= 20, ("only %d yield(s) while checking one pair of big meshes"):format(counts.zfight or 0))
+end)
+
+test("hidden-contact checks stay quick and yield: a mesh path flush in the ground with 600 crates on it", function()
+	local root, world, part = setup()
+	local path = mesh(root, "MeshPath", Vector3.new(40, 0.5, 40), CFrame.new(0, -0.25, 0))
+	-- Its top only: a 40 x 40 grid of quads, two triangles each.
+	local n, h, triangles = 40, path.Size / 2, {}
+	for i = 0, n - 1 do
+		for j = 0, n - 1 do
+			local x0, x1 = -h.X + 2 * h.X * i / n, -h.X + 2 * h.X * (i + 1) / n
+			local z0, z1 = -h.Z + 2 * h.Z * j / n, -h.Z + 2 * h.Z * (j + 1) / n
+			local p00, p10, p11, p01 = Vector3.new(x0, h.Y, z0), Vector3.new(x1, h.Y, z0), Vector3.new(x1, h.Y, z1), Vector3.new(x0, h.Y, z1)
+			table.insert(triangles, { p00, p11, p10 })
+			table.insert(triangles, { p00, p01, p11 })
+		end
+	end
+	world.setMeshTriangles(path, triangles)
+	local seed = 7
+	local function random(lo, hi)
+		seed = (seed * 1103515245 + 12345) % 2147483648
+		return lo + (hi - lo) * seed / 2147483648
+	end
+	for _ = 1, 600 do
+		part("Crate", Vector3.new(3, 3, 3), CFrame.new(random(-25, 25), 1.5, random(-25, 25)))
+	end
+	-- The longest stretch of z-fight work between yields.
+	local stage, last, longest = nil, os.clock(), 0
+	world.yield = function()
+		local now = os.clock()
+		if stage == "zfight" then
+			longest = math.max(longest, now - last)
+		end
+		last = now
+	end
+	local report
+	coroutine.wrap(function()
+		report = BG.scan(root, {
+			world = world,
+			onProgress = function(name)
+				stage = name
+			end,
+		})
+	end)()
+	local seconds = 0
+	for _, t in report.timings do
+		if t.name == "zfight" then
+			seconds = t.seconds
+		end
+	end
+	expect(involves(checks(report, "zfight"), path), "the path's top is flush with the ground's")
+	-- 0.6.2 took about 8 s here, with 0.7 s stretches without a yield.
+	expect(seconds < 4, ("z-fight check took %.2f s"):format(seconds))
+	expect(longest < 0.2, ("%.3f s of z-fight work without a yield"):format(longest))
 end)

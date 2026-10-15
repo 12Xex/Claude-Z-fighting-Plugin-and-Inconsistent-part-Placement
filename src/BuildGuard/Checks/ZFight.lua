@@ -13,11 +13,19 @@
 
 	Faces that touch back-to-back (a part resting on another) point opposite
 	ways and are left alone: those faces are hidden, not flickering. So is a
-	same-facing overlap covered all over, back to back, by faces of third
-	parts that show: a footing's top flush with the ground pad it passes
-	through, both under the road resting on them, or two layer-0 items'
-	bottoms on the road. Such contacts are dropped; one only partly covered
-	still counts.
+	same-facing overlap nothing can see, which is dropped:
+	  * Covered all over by faces of third parts pointing the other way,
+	    lying on it or up to their zFightNudge in front (where a fix lifting
+	    them leaves them): a footing's top flush with the ground pad it
+	    passes through, both under the road resting on them, or two layer-0
+	    items' bottoms on the road. Covers that overlap count once.
+	  * Inside third parts or deep in terrain, just in front of it and just
+	    behind: footings of overlapping road pieces buried in the ground, a
+	    contact sunk inside a road. Face covers and the parts of the plane
+	    blocks and wedges hold join in one union; terrain and round parts
+	    are tested at the corners and middle of what's left.
+	Only opaque parts hide anything: Transparency at most 0.05, and not
+	Glass or ForceField. An overlap partly in view still counts, all of it.
 
 	Seams: each flat overlap's width is its thinnest extent. A pair of part
 	faces overlapping only in strips narrower than zFightSeamWidth, each
@@ -44,8 +52,10 @@
 	    behind the other's, so no gap of light opens under it. Not when its
 	    far face would end within zFightTolerance (plus a margin) of the
 	    surface it sinks into (a marking no thicker than the nudge), or one
-	    of its faces would end flush on one of the hiding part's (a rib
-	    across a road's full width, its ends in line with the road's sides).
+	    of its faces would end flush on a face of any part it then touches
+	    (a rib across a road's full width, its ends in line with the road's
+	    sides; a road on a pad and its footing, sides in line with the
+	    footing's). Only opaque parts hide a side.
 	    If it z-fights on both opposite sides of one axis and can't sink, a
 	    nudge away from the hidden side clears both but sinks that side into
 	    the other part; when neither side is hidden (a window exactly as
@@ -91,7 +101,29 @@ local SINK_MARGIN = 0.005
 -- Share of a contact's overlap that may stay uncovered (arithmetic rounding;
 -- Geometry.overlapCover already allows for float32 positions).
 local COVER_SLACK = 1e-6
+-- Above this many cover faces near a pair, index them.
+local BRUTE_FORCE_COVERS = 16
+-- More distinct contact planes than this in one pair (a curved mesh): take
+-- every face of the parts nearby as a possible cover.
+local MAX_COVER_PLANES = 32
+-- Pairs whose contacts span more than this (studs) look up the parts that
+-- could hide each contact on its own.
+local NEARBY_EXTENT = 256
+-- Parts more see-through than this hide nothing behind them (Transparency
+-- is stored as float32: 0.05 reads back as 0.0500000007).
+local OPAQUE_TRANSPARENCY = 0.05 + 1e-6
+local SEE_THROUGH = { Glass = true, ForceField = true }
 local NO_FACES = {}
+
+-- Does `part` hide what's behind it? Only opaque parts do: Glass and
+-- ForceField draw see-through, and so does any Transparency above 0.05.
+local function opaque(part)
+	if part.Transparency > OPAQUE_TRANSPARENCY then
+		return false
+	end
+	local material = Util.prop(part, "Material")
+	return not (material and SEE_THROUGH[material.Name])
+end
 
 local function boxesNear(a, b, margin)
 	return a.min.X <= b.max.X + margin
@@ -154,6 +186,21 @@ local function faceWidth(f)
 		f.width = if best == math.huge then 0 else best
 	end
 	return f.width
+end
+
+-- Area and perimeter of a flat face (cached on it).
+local function faceSize(f)
+	if not f.surface then
+		local points, surface, perimeter = f.points, 0, 0
+		for k = 3, #points do
+			surface += (points[k - 1] - points[1]):Cross(points[k] - points[1]).Magnitude / 2
+		end
+		for k, p in points do
+			perimeter += (points[k % #points + 1] - p).Magnitude
+		end
+		f.surface, f.perimeter = surface, perimeter
+	end
+	return f.surface, f.perimeter
 end
 
 local function boundsTouch(fa, fb, margin)
@@ -506,58 +553,363 @@ function ZFight.scan(ctx)
 		end
 	end
 
-	-- Faces of the candidates other than `i` and `j` near both `a` and `b`:
-	-- what could cover their contacts. Meshes' triangles aren't read for it.
-	local margin = Vector3.one * search
-	local function nearbyFaces(a, b, i, j)
-		local box = { min = a.min:Max(b.min) - margin, max = a.max:Min(b.max) + margin }
-		local faces = {}
-		for _, k in hash:query(box.min, box.max) do
+	-- What can hide a contact: opaque candidates, not meshes (their
+	-- triangles aren't read for it).
+	local hiding = {}
+	local function hides(k)
+		local h = hiding[k]
+		if h == nil then
 			local s = candidates[k]
-			if k ~= i and k ~= j and boxesNear(s, box, 0) and not isMeshLike(s) then
-				for _, f in Geometry.faces(s) do
-					table.insert(faces, f)
+			h = opaque(s.part) and not isMeshLike(s)
+			hiding[k] = h
+		end
+		return h
+	end
+	-- How far in front of a contact a cover's face may lie: up to its own
+	-- zFightNudge, the gap a fix leaves when it lifts the cover (a road
+	-- nudged off its footing and the pad around it still hides their tops).
+	local reach, coverMargin = {}, search
+	for k, s in candidates do
+		worked()
+		reach[k] = math.max(tolerance, ctx.configFor(s.part).zFightNudge) + GAP_SLACK
+		coverMargin = math.max(coverMargin, reach[k])
+	end
+	local coverBox = Vector3.one * coverMargin
+	-- Samples of an open overlap are tested this far in front of and behind
+	-- its plane, so a part only resting on it (its face a cover) doesn't
+	-- count as holding it.
+	local depth = tolerance / 2
+	local insideTerrain = ctx.world and ctx.world.isInsideTerrain
+
+	-- Each solid's box as numbers (cached): Vector3 fields are slow to read
+	-- in the loops below.
+	local boxes = {}
+	local function boxOf(s)
+		local b = boxes[s]
+		if not b then
+			local lo, hi = s.min, s.max
+			b = { lo.X, lo.Y, lo.Z, hi.X, hi.Y, hi.Z }
+			boxes[s] = b
+		end
+		return b
+	end
+
+	-- The opaque parts other than `i` and `j` whose boxes meet lo..hi.
+	local function hidersIn(lo, hi, i, j)
+		local x0, y0, z0, x1, y1, z1 = lo.X, lo.Y, lo.Z, hi.X, hi.Y, hi.Z
+		local out = {}
+		for _, k in hash:query(lo, hi) do
+			worked()
+			if k ~= i and k ~= j then
+				local s = candidates[k]
+				local b = boxOf(s)
+				if b[1] <= x1 and x0 <= b[4] and b[2] <= y1 and y0 <= b[5] and b[3] <= z1 and z0 <= b[6] and hides(k) then
+					table.insert(out, s)
 				end
 			end
 		end
-		return faces
+		return out
 	end
-	-- Is the whole overlap of contact `c` covered, back to back, by faces
-	-- pointing the other way in its plane (a road resting on its footing and
-	-- on the ground pad the footing passes through)? Nothing can see it.
-	local function covered(c, faces)
-		local fa, fb = c.faceA, c.faceB
-		local covers = {}
-		for _, f in faces do
+
+	-- Is `p` inside one of `solids`, or deep in terrain?
+	local function inside(p, solids)
+		local x, y, z = p.X, p.Y, p.Z
+		for _, s in solids do
+			local b = boxOf(s)
 			if
-				f.normal:Dot(fa.normal) <= -PARALLEL
-				and math.abs((f.center - fa.center):Dot(fa.normal)) <= tolerance
-				and math.abs((f.center - fb.center):Dot(fa.normal)) <= tolerance
-				and boundsTouch(f, fa, tolerance)
-				and boundsTouch(f, fb, tolerance)
+				x >= b[1]
+				and x <= b[4]
+				and y >= b[2]
+				and y <= b[5]
+				and z >= b[3]
+				and z <= b[6]
+				and Geometry.containsPoint(s, p)
 			then
-				table.insert(covers, f)
+				return true
 			end
 		end
-		if #covers == 0 then
+		return insideTerrain ~= nil and insideTerrain(p) == true
+	end
+
+	-- Does one of `solids` have its box on the stretch from `depth` to
+	-- `coverMargin` in front of `p` (along `n`), or is terrain deep just in
+	-- front? Anything covering or holding `p` does.
+	local function shaded(p, n, solids)
+		local x, y, z, nx, ny, nz = p.X, p.Y, p.Z, n.X, n.Y, n.Z
+		local ax, ay, az = x + nx * depth, y + ny * depth, z + nz * depth
+		local bx, by, bz = x + nx * coverMargin, y + ny * coverMargin, z + nz * coverMargin
+		local x0, x1 = math.min(ax, bx), math.max(ax, bx)
+		local y0, y1 = math.min(ay, by), math.max(ay, by)
+		local z0, z1 = math.min(az, bz), math.max(az, bz)
+		for _, s in solids do
+			local b = boxOf(s)
+			if b[1] <= x1 and x0 <= b[4] and b[2] <= y1 and y0 <= b[5] and b[3] <= z1 and z0 <= b[6] then
+				return true
+			end
+		end
+		return insideTerrain ~= nil and insideTerrain(Vector3.new(ax, ay, az)) == true
+	end
+
+	-- World bounds of a contact's overlap (cached on it).
+	local function overlapBounds(c)
+		if not c.lo then
+			local aLo, aHi = bounds(c.faceA)
+			local bLo, bHi = bounds(c.faceB)
+			local lo, hi = aLo:Max(bLo), aHi:Min(bHi)
+			c.lo, c.hi = lo:Min(hi), lo:Max(hi)
+		end
+		return c.lo, c.hi
+	end
+
+	-- Do `solids` (or terrain) hold every one of `samples`, just in front of
+	-- and just behind it (along `n`)?
+	local function held(samples, solids, n)
+		local ahead = n * depth
+		for _, p in samples do
+			worked()
+			if not inside(p + ahead, solids) or not inside(p - ahead, solids) then
+				return false
+			end
+		end
+		return true
+	end
+
+	-- Does one of `solids` hold every one of `samples` just in front (along
+	-- `n`), and one (maybe another) every one just behind? Parts are convex,
+	-- so they then hold the whole polygon the samples outline.
+	local function heldWhole(samples, solids, n)
+		local function oneHolds(offset)
+			for _, s in solids do
+				local all = true
+				for _, p in samples do
+					worked()
+					if not Geometry.containsPoint(s, p + offset) then
+						all = false
+						break
+					end
+				end
+				if all then
+					return true
+				end
+			end
 			return false
 		end
-		local area, total = Geometry.overlapCover(fa, fb, covers)
-		return total > 0 and area >= total * (1 - COVER_SLACK)
+		return oneHolds(n * depth) and oneHolds(n * -depth)
 	end
-	-- `contacts` less those covered by parts that show (round ones can't be).
-	local function uncovered(contacts, a, b, i, j)
-		local faces = nil
-		local kept = {}
+
+	-- What could hide contact `c` between `i` and `j`: "inside" when its
+	-- overlap is inside an opaque part (footings overlapping in the ground,
+	-- a contact sunk inside a road), "maybe" when faces covering it or
+	-- parts and terrain holding it could (see `hidden`), nil when it shows.
+	-- Whatever hides it covers or holds every point of it, so each sample
+	-- of the overlap needs an opaque part's box just in front (most
+	-- contacts in the open fail at the overlap's middle). Also returns the
+	-- opaque parts near it (from `nearby`, the pair's, when they're few).
+	local function whatHides(c, i, j, nearby)
+		local fa = c.faceA
+		local n = fa.normal
+		local back, far = n * -depth, n * coverMargin
+		local solids = nearby
+		if not solids or #solids > BRUTE_FORCE_COVERS then
+			local middle = c.position
+			if not shaded(middle, n, hidersIn(middle + back:Min(far), middle + back:Max(far), i, j)) then
+				return nil
+			end
+			local lo, hi = overlapBounds(c)
+			solids = hidersIn(lo + back:Min(far), hi + back:Max(far), i, j)
+		elseif not shaded(c.position, n, solids) then
+			return nil
+		end
+		local overlap = Geometry.overlapPolygon(fa, c.faceB)
+		if #overlap < 3 then
+			return nil
+		end
+		local samples = Geometry.polygonSamples(overlap, 2 * Geometry.floatSliver(fa.center))
+		if heldWhole(samples, solids, n) then
+			return "inside", solids
+		end
+		for _, p in samples do
+			worked()
+			if not shaded(p, n, solids) then
+				return nil
+			end
+		end
+		return "maybe", solids
+	end
+
+	-- The planes of a pair's flat contacts, { normal, at }; nil past
+	-- MAX_COVER_PLANES.
+	local function contactPlanes(contacts)
+		local planes = {}
+		for _, c in contacts do
+			local f = c.faceA
+			local known = false
+			for _, plane in planes do
+				if f.normal:Dot(plane.normal) >= PARALLEL and math.abs((f.center - plane.at):Dot(plane.normal)) <= tolerance then
+					known = true
+					break
+				end
+			end
+			if not known then
+				if #planes >= MAX_COVER_PLANES then
+					return nil
+				end
+				table.insert(planes, { normal = f.normal, at = f.center })
+			end
+		end
+		return planes
+	end
+
+	-- Faces of the parts other than `i` and `j` that could cover the flat
+	-- `contacts`: opaque parts' faces pointing against a contact's plane and
+	-- near it. { faces, reaches, index? } (indexed when there are many).
+	local function coversNear(contacts, i, j)
+		local lo, hi = overlapBounds(contacts[1])
+		for _, c in contacts do
+			local cLo, cHi = overlapBounds(c)
+			lo, hi = lo:Min(cLo), hi:Max(cHi)
+		end
+		local box = { min = lo, max = hi }
+		local planes = contactPlanes(contacts)
+		local faces, reaches = {}, {}
+		for _, k in hash:query(lo - coverBox, hi + coverBox) do
+			worked()
+			local s = candidates[k]
+			if k ~= i and k ~= j and boxesNear(s, box, coverMargin) and hides(k) then
+				local r = reach[k]
+				for _, f in Geometry.faces(s) do
+					local wanted = planes == nil
+					for _, plane in planes or NO_FACES do
+						if f.normal:Dot(plane.normal) <= -PARALLEL then
+							local d = (f.center - plane.at):Dot(plane.normal)
+							if d >= -2 * tolerance and d <= r + tolerance then
+								wanted = true
+								break
+							end
+						end
+					end
+					if wanted then
+						table.insert(faces, f)
+						table.insert(reaches, r)
+					end
+				end
+			end
+		end
+		return { faces = faces, reaches = reaches, index = if #faces > BRUTE_FORCE_COVERS then faceIndex(faces) else nil }
+	end
+
+	-- Is contact `c` hidden all the same? When faces of opaque third parts
+	-- (`covers`) cover its whole overlap back to back (a road resting on its
+	-- footing and the ground pad the footing passes through), together with
+	-- the parts of it that `solids` hold (footings in ground made of several
+	-- slabs), and what's left open, if anything, is deep in terrain or in a
+	-- round part (tested at its corners and middle).
+	local function hidden(c, covers, solids)
+		local fa, fb = c.faceA, c.faceB
+		local lo, hi = overlapBounds(c)
+		local found = if covers.index then covers.index:query(lo - coverBox, hi + coverBox) else nil
+		local matched = {}
+		for m = 1, if found then #found else #covers.faces do
+			worked()
+			local n = if found then found[m] else m
+			local f, r = covers.faces[n], covers.reaches[n]
+			if f.normal:Dot(fa.normal) <= -PARALLEL then
+				local inFrontA = (f.center - fa.center):Dot(fa.normal)
+				local inFrontB = (f.center - fb.center):Dot(fa.normal)
+				if
+					inFrontA >= -tolerance
+					and inFrontA <= r
+					and inFrontB >= -tolerance
+					and inFrontB <= r
+					and boundsTouch(f, fa, r)
+					and boundsTouch(f, fb, r)
+				then
+					table.insert(matched, f)
+				end
+			end
+		end
+		for _, s in solids do
+			worked()
+			local section = Geometry.heldSection(s, fa.center, fa.normal, depth)
+			if section then
+				table.insert(matched, { points = section })
+			end
+		end
+		if #matched > BRUTE_FORCE_COVERS then
+			-- Many small covers (crates on a slab) whose areas, grown as
+			-- overlapCover grows them, add up to less than the overlap can't
+			-- cover it: skip their union, and test the whole overlap below.
+			local grow = Geometry.floatSliver(fa.center)
+			local most = 0
+			for _, f in matched do
+				worked()
+				local surface, perimeter = faceSize(f)
+				most += surface + perimeter * grow + 8 * #f.points * grow * grow
+			end
+			if most < c.area * (1 - COVER_SLACK) then
+				matched = NO_FACES
+			end
+		end
+		local covered, total, open = Geometry.overlapCover(fa, fb, matched)
+		if total <= 0 then
+			return false
+		elseif total - covered <= total * COVER_SLACK then
+			return true
+		end
+		local inset = 2 * Geometry.floatSliver(fa.center)
+		for _, piece in open do
+			if not held(Geometry.polygonSamples(piece, inset), solids, fa.normal) then
+				return false
+			end
+		end
+		return true
+	end
+
+	-- The flat `contacts` of `i` and `j` less those nothing can see: inside
+	-- opaque parts or deep in terrain (footings overlapping in the ground, a
+	-- contact sunk inside a road), or covered (see `hidden`).
+	local function shown(contacts, i, j)
+		if #contacts == 0 then
+			return contacts
+		end
+		local lo, hi = overlapBounds(contacts[1])
+		for _, c in contacts do
+			local cLo, cHi = overlapBounds(c)
+			lo, hi = lo:Min(cLo), hi:Max(cHi)
+		end
+		-- One query for the pair's few neighbours; contacts as big as a
+		-- map's slabs query their own.
+		local nearby = if (hi - lo).Magnitude <= NEARBY_EXTENT then hidersIn(lo - coverBox, hi + coverBox, i, j) else nil
+		local gone, open, near = {}, {}, {}
 		for _, c in contacts do
 			worked()
-			faces = faces or nearbyFaces(a, b, i, j)
-			if c.round or not covered(c, faces) then
+			local how, solids = whatHides(c, i, j, nearby)
+			if how == "inside" then
+				gone[c] = true
+			elseif how == "maybe" then
+				table.insert(open, c)
+				near[c] = solids
+			end
+		end
+		if #open > 0 then
+			local covers = coversNear(open, i, j)
+			for _, c in open do
+				gone[c] = hidden(c, covers, near[c])
+			end
+		end
+		if next(gone) == nil then
+			return contacts
+		end
+		local kept = {}
+		for _, c in contacts do
+			if not gone[c] then
 				table.insert(kept, c)
 			end
 		end
 		return kept
 	end
+
+	local margin = Vector3.one * search
 
 	local issues = {}
 	local copyOf = {}
@@ -588,7 +940,7 @@ function ZFight.scan(ctx)
 					table.insert(issues, Meshes.overlapIssue(ctx, a, b, ratio))
 				end
 			end
-			local contacts = uncovered(faceContacts(facesA, facesB, search, minArea, indexOf, worked), a, b, i, j)
+			local contacts = shown(faceContacts(facesA, facesB, search, minArea, indexOf, worked), i, j)
 			local round = roundContact(a, b, tolerance, search, minArea)
 			if round then
 				table.insert(contacts, round)
@@ -650,37 +1002,56 @@ local function ownFace(s, axis, sign)
 end
 
 -- The part other than `exclude` filling the area just beyond `face`, or
--- nil. Parts that don't show (zFightIgnoreTransparency) hide nothing.
-local function partBeyond(face, distance, world, exclude, config)
+-- nil. Only opaque parts hide anything.
+local function partBeyond(face, distance, world, exclude)
 	if not world or not face then
 		return nil
 	end
 	local probe = face.center + face.normal * distance
 	return world.partAt(probe, function(instance)
-		return exclude[instance] == true or instance.Transparency >= config.zFightIgnoreTransparency
+		return exclude[instance] == true or not opaque(instance)
 	end)
 end
 
 -- Can mover `s` shift `by` along its local `axis` into `hider`, the part
 -- hiding that side? Not when its far face would end within zFightTolerance
 -- (plus SINK_MARGIN) of the surface it sinks into, nor when any face of it
--- would end flush on a face of the hider, overlapping it (a rib across a
--- road's full width: its ends in line with the road's sides).
-local function canSink(s, axis, by, hider, config)
-	local tolerance = config.zFightTolerance
+-- would end flush on a face it isn't flush with now, of any part it would
+-- then touch (a rib across a road's full width: its ends in line with the
+-- road's sides; a road sunk into the pad it rests on and into its footing,
+-- whose sides are in line with the road's).
+local function canSink(s, axis, by, hider, world, config)
+	local tolerance, minArea = config.zFightTolerance, config.zFightMinOverlapArea
 	if Geometry.component(s.size, axis) - math.abs(by) <= tolerance + SINK_MARGIN then
 		return false
 	end
 	local offset = s.axes[axis] * by
-	local hiderFaces = Geometry.faces(Geometry.solid(hider))
-	for _, f in Geometry.faces(s) do
-		local moved = { normal = f.normal, center = f.center + offset, points = table.create(#f.points) }
-		for i, p in f.points do
-			moved.points[i] = p + offset
+	local parts = { hider }
+	if world.partsInBox then
+		parts = world.partsInBox(s.cf + offset, s.size + Vector3.one * (2 * tolerance))
+		if not table.find(parts, hider) then
+			table.insert(parts, hider)
 		end
-		for _, h in hiderFaces do
-			if Geometry.coplanarOverlap(moved, h, tolerance, config.zFightMinOverlapArea) then
-				return false
+	end
+	local faces, moved = Geometry.faces(s), {}
+	for k, f in faces do
+		moved[k] = { normal = f.normal, center = f.center + offset, points = table.create(#f.points) }
+		for i, p in f.points do
+			moved[k].points[i] = p + offset
+		end
+	end
+	for _, part in parts do
+		if
+			part ~= s.part
+			and part.Transparency < config.zFightIgnoreTransparency
+			and not (world.isTerrain and world.isTerrain(part))
+		then
+			for _, h in Geometry.faces(Geometry.solid(part)) do
+				for k, m in moved do
+					if Geometry.coplanarOverlap(m, h, tolerance, minArea) and not Geometry.coplanarOverlap(faces[k], h, tolerance, minArea) then
+						return false
+					end
+				end
 			end
 		end
 	end
@@ -826,12 +1197,12 @@ local function resolveRequest(request, world, config)
 			-- Toward a side a third part hides (a layer-0 item's bottom on the
 			-- road): moving that side off it would open a gap of light there.
 			-- Only as far as it can sink (canSink); else the other way.
-			local posHider = partBeyond(request.posFace[axis] or ownFace(s, axis, 1), probe, world, request.exclude, config)
-			local negHider = partBeyond(request.negFace[axis] or ownFace(s, axis, -1), probe, world, request.exclude, config)
+			local posHider = partBeyond(request.posFace[axis] or ownFace(s, axis, 1), probe, world, request.exclude)
+			local negHider = partBeyond(request.negFace[axis] or ownFace(s, axis, -1), probe, world, request.exclude)
 			local down, up = math.max(n, request.posBack[axis]), math.max(p, request.negBack[axis])
-			if negHider and not posHider and canSink(s, axis, -down, negHider, config) then
+			if negHider and not posHider and canSink(s, axis, -down, negHider, world, config) then
 				shift[axis] = -down
-			elseif posHider and not negHider and canSink(s, axis, up, posHider, config) then
+			elseif posHider and not negHider and canSink(s, axis, up, posHider, world, config) then
 				shift[axis] = up
 			elseif p > 0 and n > 0 then
 				if negHider and not posHider then
