@@ -883,6 +883,111 @@ test("gap: the edge step is still checked on a road with a gap under it", functi
 	expect(edges["+Z"] and edges["-Z"], "the drop beside it is a step too:\n" .. BG.format(report))
 end)
 
+test("gap: an invisible footing doesn't close the gap (light shows through it), though the road still rests on it", function()
+	for _, transparency in { 0, 0.5, 1 } do
+		local root, world, part = setup()
+		local road = overDip(part, "Road_West_2", Vector3.new(24, 0.8, W), 1.21, 12)
+		local footing = part("Footing", Vector3.new(12, 1.21, W), CFrame.new(0, 1.21 / 2, 0))
+		footing.Transparency = transparency
+		local report = BG.scan(root, { world = world })
+		local gaps = gapsOf(report, road)
+		expect(#checks(report, "offground") == 0, transparency .. ": " .. BG.format(report))
+		if transparency < D.zFightIgnoreTransparency then
+			expect(#gaps == 0, transparency .. ": a footing you can see fills the dip\n" .. BG.format(report))
+		else
+			expect(#gaps == 1, transparency .. ": " .. BG.format(report))
+			local g = gaps[1]
+			near(g.value, 1.21, 1e-3, "measured through the footing to the ground under it")
+			local wanted = (
+				"Road Workspace/Road_West_2 has a 1.21-stud gap under its %s edge at %s (limit %.2f) that shows through invisible "
+				.. "Workspace/Footing: make it opaque (Transparency under %.2f) so it fills the gap, sink the road into the ground "
+				.. "(negative roadLift), or raise the ground there"
+			):format(g.edge, Util.vector(g.position), D.maxHover, D.zFightIgnoreTransparency)
+			expect(g.message == wanted, g.message .. "\n" .. wanted)
+		end
+	end
+	-- A rail gets no advice to sink.
+	local root, world, part = setup()
+	local rail = overDip(part, "Rail_1", Vector3.new(20, 0.5, 1), 1, 12, D.railLift)
+	part("Footing", Vector3.new(12, 1, 2), CFrame.new(0, 0.5, 0)).Transparency = 1
+	local report = BG.scan(root, { world = world })
+	local gaps = gapsOf(report, rail)
+	expect(#gaps == 1, "rail over an invisible footing: " .. BG.format(report))
+	near(gaps[1].value, 1 + D.railLift, 1e-3, "rail gap")
+	expect(has(gaps[1].message, "so it fills the gap, or raise the ground there"), gaps[1].message)
+	-- The snap still counts an invisible part as ground: a road on one stays put.
+	local root2, world2, part2 = setup()
+	part2("CollisionFloor", Vector3.new(30, 1, W + 4), CFrame.new(0, 0.5, 0)).Transparency = 1
+	local onFloor = part2("Road_1", Vector3.new(20, 0.8, W), CFrame.new(0, 1 + D.roadLift + 0.4, 0))
+	local plan = BG.planSnap({ onFloor }, { world = world2 })
+	expect(#plan.items == 0, BG.Plan.describe(plan))
+end)
+
+-- Terrain banks `depth` high either side of a ravine running along Z,
+-- sloping at 45° from x = ±14 at their tops down to the ground slab, and a
+-- road 40 long resting across them.
+local function overRavine(part, world, name, depth)
+	for _, side in { -1, 1 } do
+		world.fillTerrain(CFrame.new(side * 34, depth / 2, 0), Vector3.new(40, depth, W + 8))
+		-- The slope is the top face of a block 4 thick turned 45° about Z.
+		local mid = CFrame.new(side * (14 - depth / 2), depth / 2, 0) * CFrame.Angles(0, 0, side * math.rad(45))
+		world.fillTerrain(mid * CFrame.new(0, -2, 0), Vector3.new(depth * math.sqrt(2), 4, W + 8))
+	end
+	return part(name, Vector3.new(40, 0.8, W), CFrame.new(0, depth + D.roadLift + 0.4, 0))
+end
+
+test("gap: an edge spanning a drop deeper than connectMaxStep is a bridge, sloped banks and all; a shallow dip is still a gap", function()
+	-- A bridge resting on 45° banks over a ravine 12 deep: its long edges
+	-- pass every depth on the way down the banks.
+	local root, world, part = setup()
+	local bridge = overRavine(part, world, "Road_Bridge", 12)
+	local report = BG.scan(root, { world = world })
+	expect(#gapsOf(report, bridge) == 0, BG.format(report))
+	expect(#checks(report, "offground") == 0, BG.format(report))
+	-- The same banks round a dip 1.5 deep.
+	local root2, world2, part2 = setup()
+	local road = overRavine(part2, world2, "Road_Dip", 1.5)
+	local gaps = gapsOf(BG.scan(root2, { world = world2 }), road)
+	expect(#gaps == 1, "a shallow dip with sloped sides")
+	near(gaps[1].value, 1.5, 1e-3, "down to the dip's floor")
+	-- The ravine filled up to 1.5 below the deck under its +Z side only: the
+	-- -Z edge is still a span, the +Z edge hangs over a dip.
+	local root3, world3, part3 = setup()
+	local half = overRavine(part3, world3, "Road_Half", 12)
+	part3("Fill", Vector3.new(30, 10.5, W / 2 + 4), CFrame.new(0, 10.5 / 2, (W / 2 + 4) / 2))
+	report = BG.scan(root3, { world = world3 })
+	gaps = gapsOf(report, half)
+	expect(#gaps == 1 and gaps[1].edge == "+Z", BG.format(report))
+	near(gaps[1].value, 1.5, 1e-3, "over the fill")
+end)
+
+test("gap: over water it's measured to the water surface; the snap still looks through water", function()
+	-- A beach road with its +Z edge 3 studs out over the sea: deep water
+	-- (the seabed more than connectMaxStep down), then shallow water.
+	for _, case in { { beach = 6, water = 4 }, { beach = 3, water = 2 } } do
+		local root, world, part = setup()
+		world.fillTerrain(CFrame.new(0, case.beach / 2, -20), Vector3.new(60, case.beach, 40))
+		world.fillTerrain(CFrame.new(0, case.water / 2, 20), Vector3.new(60, case.water, 40), "Water")
+		local road = part("Road_Beach", Vector3.new(30, 0.8, W), CFrame.new(0, case.beach + D.roadLift + 0.4, 3 - W / 2))
+		local report = BG.scan(root, { world = world })
+		local gaps = gapsOf(report, road)
+		local label = ("beach %d, water %d: "):format(case.beach, case.water)
+		expect(#gaps == 1, label .. BG.format(report))
+		near(gaps[1].value, case.beach - case.water, 1e-3, label .. "to the water surface")
+		local wanted = ("Road Workspace/Road_Beach has a %.2f-stud gap above the water under its"):format(case.beach - case.water)
+		expect(has(gaps[1].message, wanted), gaps[1].message)
+	end
+	-- A road out over the water: it hovers above the seabed, not the water.
+	local root, world, part = setup()
+	world.fillTerrain(CFrame.new(0, 2, 0), Vector3.new(80, 4, 80), "Water")
+	local pier = part("Road_Pier", Vector3.new(20, 0.8, W), CFrame.new(0, 4 + D.roadLift + 0.4, 0))
+	local report = BG.scan(root, { world = world })
+	local off = checks(report, "offground")
+	expect(#off == 1 and off[1].parts[1] == pier, BG.format(report))
+	near(off[1].value, -4, 1e-3, "measured to the seabed")
+	expect(not world.isSolidTerrain(Vector3.new(0, 2, 0)) and not world.isInsideTerrain(Vector3.new(0, 2, 0)), "water isn't solid")
+end)
+
 test("issue order: zseam comes right after zgap, and gap right after edge", function()
 	local root, world, part = setup()
 	overDip(part, "Road_1", Vector3.new(24, 0.8, W), 1.21, 12)
@@ -905,6 +1010,58 @@ test("issue order: zseam comes right after zgap, and gap right after edge", func
 	end
 	local text = table.concat(order, ", ")
 	expect(text == "zgap, zseam, edge, gap", text .. "\n" .. BG.format(report))
+end)
+
+test("gap: what shows is found with no extra rays unless the ground hit is invisible or under water", function()
+	local Ground = Harness.module("Checks/Ground")
+	local root, world, part = setup()
+	local road = overDip(part, "Road_1", Vector3.new(24, 0.8, W), 1.21, 12)
+	local footing = part("Footing", Vector3.new(12, 1.21, W), CFrame.new(0, 1.21 / 2, 0))
+	local ctx = BG.newContext(root, { world = world })
+	local calls, raycast = 0, world.raycast
+	world.raycast = function(...)
+		calls += 1
+		return raycast(...)
+	end
+	local s = BG.Geometry.solid(road)
+	local config = (ctx.configFor(road))
+	local m = Ground.measure(s, ctx)
+	expect(calls == #m.samples, ("%d rays for %d samples"):format(calls, #m.samples))
+	calls = 0
+	expect(Ground.edgeGap(s, m, config, ctx) and calls == 0, ("%d extra rays"):format(calls))
+	-- An invisible footing is looked through: one more ray per edge sample over it.
+	footing.Transparency = 1
+	m = Ground.measure(s, ctx)
+	calls = 0
+	local worst = Ground.edgeGap(s, m, config, ctx)
+	expect(calls > 0 and worst.through == footing, ("%d extra rays"):format(calls))
+	near(worst.gap, 1.21, 1e-3, "through the footing")
+	-- Without ctx it measures to the snap's ground, as before.
+	near(Ground.edgeGap(s, m, config).gap, 0, 1e-3, "to the footing")
+end)
+
+test("self-test: P32 is left out when maxHover leaves no room for a gap under connectMaxStep, and the self-test passes", function()
+	local origin = Vector3.new(4000, 0, 4000)
+	local function hasP32(overrides)
+		local root = Instance.new("Folder")
+		root.Name = "Workspace"
+		local scene = BG.TestScene.build(root, T.FakeWorld.new(root, BG.Geometry), BG.Config.merge(overrides), origin)
+		for _, p in scene.planted do
+			if p.id == "P32" then
+				return true
+			end
+		end
+		return false
+	end
+	expect(hasP32({}), "planted at the defaults")
+	expect(hasP32({ maxHover = D.connectMaxStep - 0.2 }), "room for a gap just over maxHover")
+	expect(not hasP32({ maxHover = D.connectMaxStep - 0.1 }), "no room under connectMaxStep")
+	expect(not hasP32({ connectMaxStep = 0.1 }), "no room at the smallest connectMaxStep")
+	local root = Instance.new("Folder")
+	root.Name = "Workspace"
+	local world = T.FakeWorld.new(root, BG.Geometry)
+	local result = BG.selfTest({ world = world, parent = root, config = { maxHover = D.connectMaxStep }, origin = origin })
+	expect(result.passed, result.text)
 end)
 
 T.section("Roads: road-like slabs that aren't checked as roads")

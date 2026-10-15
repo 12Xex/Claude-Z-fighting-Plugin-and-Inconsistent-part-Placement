@@ -3,8 +3,10 @@
 	the world through this interface, so tests can swap in a fake one
 	(tests/FakeWorld.luau):
 
-	  raycast(origin, direction, ignore?) -> { instance, position, normal } | nil
+	  raycast(origin, direction, ignore?, includeWater?) -> { instance, position, normal, water? } | nil
 	      ignore(instance) -> true to skip a hit and keep going
+	      rays pass through water unless includeWater is true; then a ray
+	      can stop at the water surface (Terrain, with water = true)
 	  partAt(point, ignore?) -> BasePart | nil
 	      the part the point is inside: primitive shapes exactly, meshes and
 	      unions by the shape the engine collides with
@@ -389,10 +391,10 @@ function StudioWorld.new(worldRoot)
 	local terrain = workspace.Terrain
 	local self = { terrain = terrain }
 
-	function self.raycast(origin, direction, ignore)
+	function self.raycast(origin, direction, ignore, includeWater)
 		local params = RaycastParams.new()
 		params.FilterType = Enum.RaycastFilterType.Exclude
-		params.IgnoreWater = true
+		params.IgnoreWater = not includeWater
 		local excluded = {}
 		for _ = 1, MAX_SKIPS do
 			params.FilterDescendantsInstances = excluded
@@ -405,7 +407,8 @@ function StudioWorld.new(worldRoot)
 				-- next hit is still measured from the original start.
 				table.insert(excluded, result.Instance)
 			else
-				return { instance = result.Instance, position = result.Position, normal = result.Normal }
+				local water = result.Instance == terrain and result.Material == Enum.Material.Water
+				return { instance = result.Instance, position = result.Position, normal = result.Normal, water = water or nil }
 			end
 		end
 		return nil

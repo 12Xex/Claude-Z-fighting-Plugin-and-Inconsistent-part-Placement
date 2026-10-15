@@ -2,6 +2,9 @@
 	A world adapter for tests: brute-force raycasts against the parts under a
 	root folder, plus box-shaped "terrain" blocks. Same interface as
 	src/BuildGuard/StudioWorld.lua.
+
+	Blocks filled with "Water" are water, as in Studio: raycasts pass through
+	them unless asked to include water, and they're never solid.
 ]]
 
 local roblox = require("@lune/roblox")
@@ -87,11 +90,11 @@ function FakeWorld.new(root, Geometry)
 		return out
 	end
 
-	function self.raycast(origin, direction, ignore)
+	function self.raycast(origin, direction, ignore, includeWater)
 		local length = direction.Magnitude
 		local unit = direction.Unit
 		local finish = origin + direction
-		local best, bestInstance
+		local best, bestInstance, water
 		for _, s in near(origin:Min(finish), origin:Max(finish)) do
 			if not (ignore and ignore(s.part)) then
 				local t = Geometry.rayBox(s, origin, unit, length)
@@ -101,13 +104,15 @@ function FakeWorld.new(root, Geometry)
 			end
 		end
 		for _, b in blocks do
-			local t = Geometry.rayBox(b, origin, unit, length)
-			if t and (not best or t < best) then
-				best, bestInstance = t, terrain
+			if includeWater or not b.water then
+				local t = Geometry.rayBox(b, origin, unit, length)
+				if t and (not best or t < best) then
+					best, bestInstance, water = t, terrain, b.water
+				end
 			end
 		end
 		if best then
-			return { instance = bestInstance, position = origin + unit * best, normal = -unit }
+			return { instance = bestInstance, position = origin + unit * best, normal = -unit, water = water or nil }
 		end
 		return nil
 	end
@@ -141,7 +146,7 @@ function FakeWorld.new(root, Geometry)
 
 	function self.isInsideTerrain(point)
 		for _, b in blocks do
-			if Geometry.containsPoint(b, point) then
+			if not b.water and Geometry.containsPoint(b, point) then
 				return true
 			end
 		end
@@ -154,8 +159,10 @@ function FakeWorld.new(root, Geometry)
 		return instance == terrain
 	end
 
-	function self.fillTerrain(cframe, size)
-		table.insert(blocks, Geometry.solidFrom(cframe, size, "Block"))
+	function self.fillTerrain(cframe, size, materialName)
+		local block = Geometry.solidFrom(cframe, size, "Block")
+		block.water = materialName == "Water"
+		table.insert(blocks, block)
 	end
 
 	-- Mesh triangles: tests register them per part, in the part's local space
@@ -194,11 +201,12 @@ function FakeWorld.new(root, Geometry)
 
 	-- New terrain is visible to raycasts at once here, so this only fails
 	-- for a probe that misses every block (it would time out in Studio).
+	-- Probes look through water, as Studio's do.
 	function self.waitForTerrain(probes)
 		for _, probe in probes do
 			local seen = false
 			for _, b in blocks do
-				seen = seen or Geometry.rayBox(b, probe.origin, probe.direction.Unit, probe.direction.Magnitude) ~= nil
+				seen = seen or (not b.water and Geometry.rayBox(b, probe.origin, probe.direction.Unit, probe.direction.Magnitude) ~= nil)
 			end
 			if not seen then
 				return false

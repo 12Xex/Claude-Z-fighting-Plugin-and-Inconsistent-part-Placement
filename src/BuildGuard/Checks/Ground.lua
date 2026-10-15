@@ -23,14 +23,18 @@
 
 	Gaps (warning, no fix): a straight part can rest on the highest ground
 	under it and still hang over dips. For a part that's on the ground (not
-	off it, not buried), the same rays measure the gap between its resting
-	face and the ground below at the samples within max(2, sampleSpacing)
-	studs of that face's edges, where a gap shows. The biggest one is
-	reported when it's over maxHover plus its kind's lift (if positive: a
-	rail's room for sleepers isn't a gap). A footing under the part is
-	ground like anything else starting below it, so it closes the gap. A
-	drop deeper than connectMaxStep is a span (a bridge, an overpass), not
-	a gap.
+	off it, not buried), the same columns measure the gap between its
+	resting face and what shows below it at the samples within max(2,
+	sampleSpacing) studs of that face's edges, where a gap shows. The
+	biggest one is reported when it's over maxHover plus its kind's lift
+	(if positive: a rail's room for sleepers isn't a gap). What shows is
+	the snap's ground, except that light passes through invisible parts
+	(Transparency at or above zFightIgnoreTransparency, as for the z-fight
+	scan) and stops at a water surface above the ground. A footing under
+	the part is ground like anything else starting below it, so it closes
+	the gap if it's visible. An edge with a drop deeper than connectMaxStep
+	anywhere along it (or no ground at all) is a span (a bridge, an
+	overpass), so none of that edge counts.
 
 	Tilted parts (ramps, slopes) are skipped: a ramp is meant to leave the
 	ground. A block lying upside down rests on its Top face (a box looks the
@@ -195,9 +199,12 @@ local function openAirAbove(start, ctx, ignore, maxUp)
 end
 
 -- Works out how far `s` must move vertically to sit on the ground.
--- Returns { delta = number, samples, groundY } or { skip = reason }:
--- `samples` are the points on the face it rests on, and groundY[i] the
--- height of the ground found under samples[i] (nil where none was found).
+-- Returns { delta = number, samples, groundY, starts, hits, waterY } or
+-- { skip = reason }: `samples` are the points on the face it rests on, and
+-- groundY[i] the height of the ground found under samples[i] (nil where
+-- none was found). starts[i] is where its ray started (nil where buried),
+-- hits[i] the ground it hit, and waterY[i] the height of a water surface
+-- above that ground (water never holds a part up; the gap check sees it).
 function Ground.measure(s, ctx)
 	local config = ctx.configFor(s.part)
 	local tilt = Geometry.tiltDegrees(s)
@@ -219,17 +226,24 @@ function Ground.measure(s, ctx)
 	local topY = s.max.Y + 0.05
 	local best, hits, buried = -math.huge, 0, 0
 	local samples = Geometry.faceSamples(s, restsOn, 0.05, 0.25, config.sampleSpacing)
-	local groundY = {}
+	local groundY, starts, found, waterY = {}, {}, {}, {}
 	for i, p in samples do
 		local start = openAirAbove(Vector3.new(p.X, topY, p.Z), ctx, ignore, config.snapSearchUp)
 		local hit
 		if start then
-			hit = ctx.world.raycast(start, Vector3.new(0, -(start.Y - p.Y + config.snapSearchDown), 0), ignore)
+			starts[i] = start
+			local down = Vector3.new(0, -(start.Y - p.Y + config.snapSearchDown), 0)
+			hit = ctx.world.raycast(start, down, ignore, true)
+			if hit and hit.water then
+				waterY[i] = hit.position.Y
+				hit = ctx.world.raycast(start, down, ignore)
+			end
 		else
 			buried += 1
 		end
 		if hit then
 			hits += 1
+			found[i] = hit
 			groundY[i] = hit.position.Y
 			best = math.max(best, hit.position.Y + liftOver(hit.instance) - p.Y)
 		end
@@ -240,34 +254,95 @@ function Ground.measure(s, ctx)
 		end
 		return { skip = "no ground below" }
 	end
-	return { delta = best, samples = samples, groundY = groundY }
+	return { delta = best, samples = samples, groundY = groundY, starts = starts, hits = found, waterY = waterY }
+end
+
+-- The edge of `s`'s resting face that the face point `p` lies within
+-- `band` studs of, named by the part's own axes, or nil.
+local function edgeOf(s, p, band)
+	local lp = s.cf:PointToObjectSpace(p)
+	local h = s.half
+	local dx, dz = h.X - math.abs(lp.X), h.Z - math.abs(lp.Z)
+	if math.min(dx, dz) > band then
+		return nil
+	end
+	return if dx <= dz then (if lp.X > 0 then "+X" else "-X") else (if lp.Z > 0 then "+Z" else "-Z")
+end
+
+-- A part light passes through: at or above zFightIgnoreTransparency, the
+-- transparency the z-fight scan treats as invisible.
+local function isSeeThrough(instance, ctx)
+	return instance:IsA("BasePart")
+		and not ctx.world.isTerrain(instance)
+		and instance.Transparency >= ctx.config.zFightIgnoreTransparency
+end
+
+-- What shows under sample `i` of measure `m`: the snap's ground, seen
+-- through invisible parts, or a water surface above it. { y, water,
+-- through } (`through` the invisible part the snap's ray hit first), or
+-- nil for a buried sample. y is nil when nothing was found below.
+local function shownUnder(m, i, ctx, ignore, config)
+	local start, hit = m.starts[i], m.hits[i]
+	if not start then
+		return nil
+	end
+	if hit and isSeeThrough(hit.instance, ctx) then
+		local down = Vector3.new(0, -(start.Y - m.samples[i].Y + config.snapSearchDown), 0)
+		local seen = ctx.world.raycast(start, down, function(instance)
+			return ignore(instance) or isSeeThrough(instance, ctx)
+		end, true)
+		return { y = seen and seen.position.Y, water = seen ~= nil and seen.water == true, through = hit.instance }
+	end
+	local water = m.waterY[i]
+	if water then
+		return { y = water, water = true }
+	end
+	return { y = hit and hit.position.Y, water = false }
 end
 
 -- The biggest gap between `s`'s resting face and the ground under it where
 -- it shows: at the samples within max(2, sampleSpacing) studs of the face's
--- edges, from a measure `m`. Returns { gap, position, edge } (edges named
--- by the part's own axes), or nil when no such sample found ground. A sunk
--- part's gaps are negative. A drop deeper than connectMaxStep is a span (a
--- bridge, an overpass), not a gap.
-function Ground.edgeGap(s, m, config)
+-- edges, from a measure `m`. Returns { gap, position, edge, water, through }
+-- (edges named by the part's own axes), or nil when no such sample found
+-- ground. A sunk part's gaps are negative. An edge with a drop deeper than
+-- connectMaxStep anywhere along it is a span (a bridge, an overpass), so
+-- none of its samples count. Given `ctx` (as the gap check does), it
+-- measures to what shows (see shownUnder): `water` is set when that's a
+-- water surface, `through` to an invisible part looked through, and a
+-- sample with nothing below it makes its edge a span. Without, it
+-- measures to the snap's ground.
+function Ground.edgeGap(s, m, config, ctx)
 	local band = math.max(2, config.sampleSpacing) + 1e-3
-	local h = s.half
-	local worst = nil
+	local ignore = ctx and Ground.ignoreFor(s, ctx)
+	local worst, spans = {}, {}
 	for i, p in m.samples or {} do
-		local y = m.groundY[i]
-		if y then
-			local lp = s.cf:PointToObjectSpace(p)
-			local dx, dz = h.X - math.abs(lp.X), h.Z - math.abs(lp.Z)
-			local gap = p.Y - y
-			if math.min(dx, dz) <= band and gap <= config.connectMaxStep and (not worst or gap > worst.gap) then
-				local edge = if dx <= dz
-					then (if lp.X > 0 then "+X" else "-X")
-					else (if lp.Z > 0 then "+Z" else "-Z")
-				worst = { gap = gap, position = p, edge = edge }
+		local edge = edgeOf(s, p, band)
+		local seen = nil
+		if edge and ctx then
+			seen = shownUnder(m, i, ctx, ignore, config)
+		elseif edge and m.groundY[i] then
+			seen = { y = m.groundY[i], water = false }
+		end
+		if seen then
+			local gap = if seen.y then p.Y - seen.y else math.huge
+			local w = worst[edge]
+			if gap > config.connectMaxStep then
+				spans[edge] = true
+			elseif not w or gap > w.gap then
+				worst[edge] = { gap = gap, position = p, edge = edge, water = seen.water, through = seen.through, index = i }
 			end
 		end
 	end
-	return worst
+	local out = nil
+	for edge, w in worst do
+		if not spans[edge] and (not out or w.gap > out.gap or (w.gap == out.gap and w.index < out.index)) then
+			out = w
+		end
+	end
+	if out then
+		out.index = nil
+	end
+	return out
 end
 
 -- Locked parts (Locked, BuildGuardLocked) are never moved by a snap.
@@ -339,15 +414,24 @@ end
 -- room for sleepers) isn't a gap.
 local function gapIssue(s, kind, ctx, m)
 	local config, sources = ctx.configFor(s.part)
-	local worst = Ground.edgeGap(s, m, config)
+	local worst = Ground.edgeGap(s, m, config, ctx)
 	local key = LIFT_KEY[kind]
 	local lift = math.max(config[key], 0)
 	if not worst or worst.gap <= config.maxHover + lift + 1e-3 then
 		return nil
 	end
-	local fix = if Config.schema[key].min < 0
-		then ("sink it into the ground (negative %s), put a footing under it, or raise the ground there"):format(key)
-		else "put a footing under it or raise the ground there"
+	local canSink = Config.schema[key].min < 0
+	local fix
+	if worst.through then
+		fix = ("make it opaque (Transparency under %.2f) so it fills the gap, %sor raise the ground there"):format(
+			ctx.config.zFightIgnoreTransparency,
+			if canSink then ("sink the %s into the ground (negative %s), "):format(string.lower(kind), key) else ""
+		)
+	elseif canSink then
+		fix = ("sink it into the ground (negative %s), put a footing under it, or raise the ground there"):format(key)
+	else
+		fix = "put a footing under it or raise the ground there"
+	end
 	return {
 		check = "gap",
 		severity = "warning",
@@ -355,15 +439,17 @@ local function gapIssue(s, kind, ctx, m)
 		position = worst.position,
 		value = worst.gap,
 		edge = worst.edge,
-		message = ("%s %s has a %.2f-stud gap under its %s edge at %s (limit %.2f%s%s): %s"):format(
+		message = ("%s %s has a %.2f-stud gap%s under its %s edge at %s (limit %.2f%s%s)%s: %s"):format(
 			kind,
 			ctx.path(s.part),
 			worst.gap,
+			if worst.water then " above the water" else "",
 			worst.edge,
 			Util.vector(worst.position),
 			config.maxHover,
 			if lift > 0 then (" + %s %.2f"):format(key, lift) else "",
 			if sources.maxHover then ", set on " .. ctx.path(sources.maxHover) else "",
+			if worst.through then " that shows through invisible " .. ctx.path(worst.through) else "",
 			fix
 		),
 	}
