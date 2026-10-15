@@ -35,9 +35,10 @@
 	the gap if it's visible. Where an edge passes over a drop deeper than
 	connectMaxStep (or no ground at all), that stretch is a span (a bridge,
 	an overpass, an end out over a cliff) and doesn't count, nor do the
-	samples either side of it out to where the edge is back on the ground
-	(its gap within the limit), so neither do the banks sloping down into a
-	ravine. The rest of the edge still counts.
+	banks sloping down into it: the samples either side whose gaps keep
+	falling as the edge runs away from the drop, out to where it's back on
+	the ground (its gap within the limit). A level dip that runs up to the
+	drop isn't a bank, and the rest of the edge still counts.
 
 	Tilted parts (ramps, slopes) are skipped: a ramp is meant to leave the
 	ground. A block lying upside down rests on its Top face (a box looks the
@@ -316,19 +317,23 @@ end
 
 -- Samples this close (studs) across an edge lie in the same row along it.
 local SAME_ROW = 0.05
+-- A bank's gap falls by more than this from one sample to the next.
+local BANK_FALL = 1e-3
 
 -- Marks in `dropped` the spans in `row` (sample indexes in order along an
 -- edge, their gaps in `found`): each sample deeper than `step` (or with
--- nothing below it), and its neighbours either side out to the first one
--- back on the ground (its gap within `limit`).
+-- nothing below it), and the bank either side of it: its neighbours out to
+-- the first one back on the ground (its gap within `limit`) or the first
+-- whose gap doesn't fall (a level dip running up to the drop still counts).
 local function dropSpans(row, found, limit, step, dropped)
 	for k, i in row do
 		if found[i].gap > step then
 			dropped[i] = true
 			for _, dir in { -1, 1 } do
-				local n = k + dir
-				while row[n] and found[row[n]].gap > limit and found[row[n]].gap <= step do
+				local n, last = k + dir, found[i].gap
+				while row[n] and found[row[n]].gap > limit and found[row[n]].gap < last - BANK_FALL do
 					dropped[row[n]] = true
+					last = found[row[n]].gap
 					n += dir
 				end
 			end
@@ -342,9 +347,9 @@ end
 -- (edges named by the part's own axes), or nil when no such sample found
 -- ground. A sunk part's gaps are negative. Where an edge passes over a drop
 -- deeper than connectMaxStep it's a span (a bridge, an overpass, an end
--- out over a cliff): those samples don't count, nor do their neighbours
--- along the edge out to the first one whose gap is within the part's limit
--- (maxHover plus its kind's lift), where the edge is back on the ground.
+-- out over a cliff): those samples don't count, nor do the banks either
+-- side (see dropSpans), out to the first sample whose gap is within the
+-- part's limit (maxHover plus its kind's lift) or doesn't fall.
 -- Given `ctx` (as the gap check does), it measures to what shows (see
 -- shownUnder): `water` is set when that's a water surface, `through` to an
 -- invisible part looked through, and a sample with nothing below it is a

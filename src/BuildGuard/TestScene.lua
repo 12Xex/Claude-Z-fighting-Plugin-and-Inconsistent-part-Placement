@@ -10,7 +10,9 @@
 	  P1  ShopSign           zfight     fix   sign half-sunk into a wall, front faces coplanar
 	  P2  LaneMarking_Flush  zfight     fix   marking whose top is flush with the road top
 	  P3  Window             zfight     fix   window exactly as thick as its wall (both sides coplanar)
-	  P4  CrossMarkB         zfight     fix   two crossing markings at the same height
+	  P4  CrossMarkB         zfight     fix   two crossing markings at the same height, thick
+	                                          enough to sink by the nudge (left out when that
+	                                          reaches buriedProbeHeight)
 	  P5  Road_HillCut       buried     fix   road under a terrain hill
 	  P6  Rail_Yard          buried     flag  rail under a crate (no safe automatic fix)
 	  P7  Road_Sunk          buried     fix   road sunk into the ground slab
@@ -69,6 +71,7 @@
 	control proving per-model overrides work.
 ]]
 
+local Config = require(script.Parent.Config)
 local Layers = require(script.Parent.Layers)
 local Geometry = require(script.Parent.Geometry)
 local Ground = require(script.Parent.Checks.Ground)
@@ -186,8 +189,14 @@ function TestScene.build(parent, world, config, origin)
 	-- Main road with bad and good markings.
 	local main = road("Road_Main", Vector3.new(100, T, W), CFrame.new(0, roadY, 0))
 	plant(part("LaneMarking_Flush", Vector3.new(6, 0.1, 0.5), CFrame.new(-30, roadTop - 0.05, 0), PAINT), "P2", "zfight", "fix", "flush with road top")
-	part("CrossMarkA", Vector3.new(8, 0.1, 0.4), CFrame.new(20, roadTop + 0.05, 0), PAINT)
-	plant(part("CrossMarkB", Vector3.new(0.4, 0.1, 8), CFrame.new(20, roadTop + 0.05, 0), PAINT), "P4", "zfight", "fix", "crossing markings, same height")
+	-- Thick enough for the fix to sink one by the nudge: lifted, it would
+	-- reach the buried probe over the road once the nudge is big. Left out
+	-- when that thick a marking would reach the probe itself.
+	local cross = math.max(0.1, Config.faceGap(config) + config.zFightTolerance + 0.02)
+	if cross < config.buriedProbeHeight then
+		part("CrossMarkA", Vector3.new(8, cross, 0.4), CFrame.new(20, roadTop + cross / 2, 0), PAINT)
+		plant(part("CrossMarkB", Vector3.new(0.4, cross, 8), CFrame.new(20, roadTop + cross / 2, 0), PAINT), "P4", "zfight", "fix", "crossing markings, same height")
+	end
 	control(Layers.place(part("LaneMarking_Layered", Vector3.new(6, 0.1, 0.5), CFrame.new(), PAINT), main, { layer = 1, u = -10, config = config }))
 
 	-- Road cut through a terrain hill (hill sized to the road, on the 4-stud voxel grid).
