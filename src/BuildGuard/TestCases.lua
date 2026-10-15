@@ -30,12 +30,12 @@
 	the same 0.02 gap seen up close, wedge facets laid exactly edge to edge,
 	a washboard rib flush on a deck at layer 0, a road resting on a ground
 	pad with a footing through the pad (the footing's top is flush with the
-	pad's, all under the road), a StreetLamp, two RoadSigns
-	and a RoofRail by the road, a Highway_Exit sign on a post, a RoadSign
-	placed on a board with Layers, a StreetLight head on a pole, a layered
-	RoadLine on the road, an ignored (tagged) crate on the main road, the P33
-	pad in a folder marked BuildGuardKind = "None", the road on the P33b
-	yard, a Slate roof panel pitched 35°.
+	pad's, all under the road; no footing when roadLift is positive), a
+	StreetLamp, two RoadSigns and a RoofRail by the road, a Highway_Exit
+	sign on a post, a RoadSign placed on a board with Layers, a StreetLight
+	head on a pole, a layered RoadLine on the road, an ignored (tagged)
+	crate on the main road, the P33 pad in a folder marked BuildGuardKind =
+	"None", the road on the P33b yard, a Slate roof panel pitched 35°.
 
 	(P24 and P25 were vehicle cases; vehicles are modelled in Blender now,
 	so BuildGuard doesn't check vehicle rigs.)
@@ -157,7 +157,9 @@ function TestCases.faces(b, origin)
 	-- reaching through the pad into the ground. Where it passes through,
 	-- the footing's top is flush with the pad's, but the road's bottom
 	-- covers all of that: hidden, not a z-fight. Beside the Tub, the pad 2
-	-- studs wider than the road on every side.
+	-- studs wider than the road on every side. A positive roadLift holds a
+	-- road that far off a support, so it can't rest on a footing: the
+	-- footing is left out then (and the road rests its lift above the pad).
 	local length = b.W + 4 -- a piece on its own is measured across its shorter side
 	local thick = math.clamp(b.config.maxLedge - b.config.roadLift - 0.1, 0.2, 1) -- as the scene's roads
 	local padTop = 1
@@ -166,9 +168,11 @@ function TestCases.faces(b, origin)
 	local padAt = o * CFrame.new(-6 - padSize.X / 2, 0, 0)
 	b.control(b.part("Ground_Yard", padSize, padAt * CFrame.new(0, padTop / 2, 0), GRASS, Enum.Material.Grass))
 	b.control(b.part("Road_OnPad", Vector3.new(b.W, thick, length), padAt * CFrame.new(0, bottom + thick / 2, 0), ASPHALT, Enum.Material.Asphalt))
-	local depth = bottom + 1
-	local DIRT = Color3.fromRGB(110, 90, 70)
-	b.control(b.part("Footing_Road_OnPad", Vector3.new(b.W, depth, length), padAt * CFrame.new(0, bottom - depth / 2, 0), DIRT, Enum.Material.Ground))
+	if Ground.effectiveLift(b.config.roadLift, thick, false) == 0 then
+		local depth = bottom + 1
+		local DIRT = Color3.fromRGB(110, 90, 70)
+		b.control(b.part("Footing_Road_OnPad", Vector3.new(b.W, depth, length), padAt * CFrame.new(0, bottom - depth / 2, 0), DIRT, Enum.Material.Ground))
+	end
 	return { far = far, tubs = tubs, land = land }
 end
 
