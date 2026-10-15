@@ -54,6 +54,7 @@ local CHECK_ORDER = {
 	duplicate = 1,
 	buried = 2,
 	offground = 3,
+	gap = 3.5,
 	zfight = 4,
 	zgap = 5,
 	meshoverlap = 6,
@@ -180,8 +181,10 @@ end
 BuildGuard.newContext = newContext
 
 -- The checks a scan runs, in order. Buried runs first: parts it flags are
--- skipped by the off-ground check, and parts either flags are skipped by
--- the edge check (one issue per part is enough).
+-- skipped by the off-ground check (which also finds gaps under the edges of
+-- parts resting on the ground), and parts either flags are skipped by the
+-- edge check (one issue per part is enough). A gap doesn't skip the edge
+-- check: nothing moves the part, and the drop beside it is still a step.
 local CHECKS = {
 	{ name = "buried", run = function(ctx, state)
 		local issues = Buried.scan(ctx)
@@ -195,7 +198,9 @@ local CHECKS = {
 	{ name = "offground", run = function(ctx, state)
 		local issues = Ground.scan(ctx, state.flagged)
 		for _, issue in issues do
-			state.flagged[issue.parts[1]] = true
+			if issue.check == "offground" then
+				state.flagged[issue.parts[1]] = true
+			end
 		end
 		return issues
 	end },
@@ -220,8 +225,11 @@ BuildGuard.CHECKS = CHECKS
 --                   `done` of `total` parts (0 of 0 when it doesn't count)
 -- }
 -- Returns { issues, partCount, config, world, counts = { error, warning },
---   root, overrides, timings = { { name, seconds } }, seconds, coverage? }.
+--   root, overrides, timings = { { name, seconds } }, seconds, coverage?,
+--   unclassified }.
 -- Every issue has `paths` (its parts' paths from the scan root).
+-- `unclassified` lists flat road-like slabs that no check treated as roads
+-- (see Classify.unclassified); BG.format prints them as one note.
 function BuildGuard.scan(root, options)
 	options = options or {}
 	local started = Util.clock()
@@ -240,6 +248,10 @@ function BuildGuard.scan(root, options)
 		end
 		table.insert(timings, { name = check.name, seconds = Util.clock() - t })
 	end
+	-- Road-like slabs no check treated as roads (a note, not issues).
+	local t = Util.clock()
+	local unclassified = Classify.unclassified(ctx)
+	table.insert(timings, { name = "unclassified", seconds = Util.clock() - t })
 	ctx.progress("done", 0, 0)
 	-- Invalid BuildGuard_ attributes found while resolving (they're ignored,
 	-- and the part falls back to its parent's settings).
@@ -288,6 +300,7 @@ function BuildGuard.scan(root, options)
 		timings = timings,
 		seconds = Util.clock() - started,
 		coverage = ctx.coverage,
+		unclassified = unclassified,
 		path = ctx.path,
 	}
 end
@@ -471,6 +484,12 @@ function BuildGuard.format(report)
 	end
 	for _, note in Meshes.describeNotes(report.coverage) do
 		table.insert(lines, "  [NOTE] " .. note)
+	end
+	if report.unclassified and #report.unclassified > 0 then
+		local pathOf = report.path or function(part)
+			return Util.path(part, report.roots)
+		end
+		table.insert(lines, "  [NOTE] " .. Classify.describeUnclassified(report.unclassified, pathOf))
 	end
 	if #report.overrides > 0 then
 		table.insert(lines, "  Config overrides in effect:")

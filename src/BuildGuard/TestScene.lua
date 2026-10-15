@@ -37,14 +37,18 @@
 	                                          the end of another
 	  P31 Road_YardThick     edge       flag  thick road on a pad that's ground through its
 	                                          folder's BuildGuardGround tag
+	  P32 Road_OverDip       gap        flag  road resting on two raised ground pads, its
+	                                          edges hanging over the dip between them
 
 	Road controls with them: the same overpass built high, a gentle wedge
 	ramp (its foot is at ground level) up to a road on a plinth, a road
-	built upside down, a thin road on the yard pad.
+	built upside down, a thin road on the yard pad, the P32 road with a
+	footing filling the dip under it (and the footing). The gentle ramp off
+	Road_E sits on an embankment: under flatTiltDegrees it counts as flat.
 
-	P17 to P26 (meshes, round parts, corner wedges, far view, repeated names
-	and names that aren't roads) are built by TestCases.lua and listed
-	there.
+	P17 to P26 and P33 (meshes, round parts, corner wedges, far view,
+	repeated names, names that aren't roads, a road-like pad with no road
+	name) are built by TestCases.lua and listed there.
 
 	Every size and height comes from the config (road width, lifts, limits),
 	so the scene plants real violations and real non-violations whatever
@@ -216,7 +220,16 @@ function TestScene.build(parent, world, config, origin)
 	-- Controls: a gentle ramp, a correctly built road, rail and track.
 	local gentle = math.min(config.maxSlopeChange, config.maxRouteSlope) / 2
 	control(road("Road_E", Vector3.new(20, T, W), CFrame.new(70, roadY, zA)))
-	guardrails(control(road("Road_F_Gentle", Vector3.new(16, T, W), CFrame.new(80, roadTop, zA) * CFrame.Angles(0, 0, math.rad(gentle)) * CFrame.new(8, -T / 2, 0))), true)
+	local gentleFoot = CFrame.new(80, roadTop, zA) * CFrame.Angles(0, 0, math.rad(gentle))
+	guardrails(control(road("Road_F_Gentle", Vector3.new(16, T, W), gentleFoot * CFrame.new(8, -T / 2, 0))), true)
+	-- Under flatTiltDegrees a ramp counts as flat, so its high end mustn't
+	-- hang over the ground (the gap check): an embankment tilted with it,
+	-- reaching a stud into the ground, holds up its whole bottom.
+	if gentle > 0 then
+		local high = gentleFoot:PointToWorldSpace(Vector3.new(16, -T, 0))
+		local depth = (high.Y + 1) / math.cos(math.rad(gentle))
+		part("Embankment", Vector3.new(16, depth, W), gentleFoot * CFrame.new(8, -T - depth / 2, 0), Color3.fromRGB(90, 140, 70), Enum.Material.Grass)
+	end
 	local good = control(road("Road_Good", Vector3.new(math.max(30, W + 4), T, W), CFrame.new(0, roadY, R)))
 	control(Layers.place(part("StopLine", Vector3.new(0.6, 0.1, 10), CFrame.new(), PAINT), good, { layer = 1, u = 10, config = config }))
 	control(Layers.place(part("Arrow", Vector3.new(3, 0.1, 0.6), CFrame.new(), PAINT), good, { layer = 2, u = 10, config = config }))
@@ -393,6 +406,30 @@ function TestScene.build(parent, world, config, origin)
 		("%.2f-stud step up from a pad that's ground by its folder's tag"):format(thick + liftFor(thick))
 	)
 	control(road("Road_YardThin", Vector3.new(L, T, W), CFrame.new(-150 + L / 2 + 5, padTop + roadY, zY)))
+
+	-- P32: a road resting on two raised ground pads with a dip between them,
+	-- its edges hanging over the dip (a straight slab over rolling land).
+	-- Guardrails along the dip keep the edge check off it. The same road
+	-- with a footing filling the dip up to its bottom is a control, and so is
+	-- the footing (it holds up a road, so it isn't a road-like slab).
+	local hang = math.min(config.maxHover + math.max(config.roadLift, 0) + 1, config.connectMaxStep - 0.1)
+	local groundPadTop = hang - lift
+	local span = L + 4
+	local dip = span - 12
+	local function overDip(name, x)
+		for _, side in { -1, 1 } do
+			local padX = x + side * (dip / 2 + 4)
+			part("Ground_Pad", Vector3.new(8, groundPadTop, W + 4), CFrame.new(padX, groundPadTop / 2, zY), Color3.fromRGB(90, 140, 70), Enum.Material.Grass)
+		end
+		local railHeight = hang + T + 0.3
+		for _, side in { -1, 1 } do
+			part("Guardrail", Vector3.new(dip, railHeight, 1), CFrame.new(x, railHeight / 2, zY + side * (W / 2 + 0.5)), METAL, Enum.Material.Metal)
+		end
+		return road(name, Vector3.new(span, T, W), CFrame.new(x, hang + T / 2, zY))
+	end
+	plant(overDip("Road_OverDip", 80), "P32", "gap", "flag", ("edges %.2f over a dip"):format(hang))
+	control(overDip("Road_OnFooting", 150))
+	control(part("Footing", Vector3.new(dip, hang, W), CFrame.new(150, hang / 2, zY), CONCRETE, Enum.Material.Concrete))
 
 	-- The v0.6 cases (TestCases.lua).
 	local builder = {

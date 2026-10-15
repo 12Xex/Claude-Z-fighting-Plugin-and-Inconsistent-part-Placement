@@ -27,6 +27,10 @@ SelfTest.DEFAULT_ORIGIN = Vector3.new(-24576, 0, 24576)
 SelfTest.TERRAIN_WAIT = 5
 
 local function reported(report, check, part)
+	-- Road-like slabs nothing checks are a note in the report, not issues.
+	if check == "unclassified" then
+		return table.find(report.unclassified or {}, part) ~= nil
+	end
 	for _, issue in report.issues do
 		if issue.check == check and table.find(issue.parts, part) then
 			return true
@@ -148,6 +152,11 @@ function SelfTest.run(BuildGuard, options)
 			if part:GetAttribute("BuildGuardControl") then
 				row(false, "control flagged: " .. issue.message)
 			end
+		end
+	end
+	for _, part in before.unclassified or {} do
+		if part:GetAttribute("BuildGuardControl") then
+			row(false, "control listed as a road-like slab nothing checks: " .. before.path(part))
 		end
 	end
 	local listed = false

@@ -36,10 +36,16 @@
 	Ignored: anything at or under an instance with the BuildGuardIgnore
 	attribute or tag. It's not scanned, and it never counts as cover, ground
 	or a hiding surface.
+
+	Road-like slabs: flat parts shaped like a road and made of a road
+	material (Config.roadLikeMaterials) that have no kind are listed in the
+	report, so roads nobody named don't go unchecked silently. BuildGuardKind
+	= "None" on a part or any ancestor leaves it off that list.
 ]]
 
 local Util = require(script.Parent.Util)
 local Geometry = require(script.Parent.Geometry)
+local SpatialHash = require(script.Parent.SpatialHash)
 
 local Classify = {}
 
@@ -214,6 +220,148 @@ function Classify.isIgnored(instance, cache)
 		cache[n] = result
 	end
 	return result
+end
+
+--------------------------------------------------------------------------------
+-- Road-like slabs nothing checks
+--------------------------------------------------------------------------------
+
+-- Is `instance` at or under an instance whose BuildGuardKind is "None"?
+-- Pass a table as `cache` to reuse answers across calls.
+function Classify.optedOut(instance, cache)
+	cache = cache or {}
+	local chain = {}
+	local node = instance
+	local result = false
+	while node do
+		local known = cache[node]
+		if known ~= nil then
+			result = known
+			break
+		end
+		table.insert(chain, node)
+		if node:GetAttribute("BuildGuardKind") == "None" then
+			result = true
+			break
+		end
+		node = node.Parent
+	end
+	for _, n in chain do
+		cache[n] = result
+	end
+	return result
+end
+
+-- Centre of a solid's face that's up (a wedge's slope runs through its centre).
+local function topCentre(s)
+	if s.shape == "Wedge" then
+		return s.pos
+	end
+	return s.cf:PointToWorldSpace(Vector3.new(0, if s.axes[2].Y < 0 then -s.half.Y else s.half.Y, 0))
+end
+
+-- Is a road/rail/track (among `kinded`, found through `hash`) resting on the
+-- middle of `s`'s top, so `s` holds it up (a footing, a plinth)? A sunk
+-- road reaches below that top; one resting on it starts at it.
+local function holdsUpKind(s, hash, kinded)
+	local c = topCentre(s)
+	local reach = Vector3.new(0.1, 0.5, 0.1)
+	for _, i in hash:query(c - reach, c + reach) do
+		local k = kinded[i]
+		local lp = k.cf:PointToObjectSpace(c)
+		if
+			k.min.Y <= c.Y + 0.5
+			and k.max.Y >= c.Y
+			and math.abs(lp.X) <= k.half.X + 0.1
+			and math.abs(lp.Z) <= k.half.Z + 0.1
+		then
+			return true
+		end
+	end
+	return false
+end
+
+-- Flat slabs that look like road surfaces but that no check treats as a
+-- road, rail or track, in scan order: shaped like a road by the name rules
+-- (flat, top within 45° of level, at least ROAD_MIN_WIDTH across, not a
+-- corner wedge) and made of a material in config.roadLikeMaterials. Left
+-- out: ground, layered and ignored parts, vehicle parts, anything at or
+-- under an instance with BuildGuardKind = "None", and slabs holding up a
+-- road/rail/track resting on the middle of their top (a footing, a
+-- plinth). Reads properties only: no raycasts.
+function Classify.unclassified(ctx)
+	local config = ctx.config
+	local materials = {}
+	for _, name in config.roadLikeMaterials do
+		materials[name] = true
+	end
+	local groundCache, noneCache = {}, {}
+	local hash, kinded = nil, nil
+	local out = {}
+	for i, s in ctx.solids do
+		local part = s.part
+		local material = Util.prop(part, "Material")
+		if
+			material
+			and materials[material.Name]
+			and not ctx.kindOf(part)
+			and looksLike(part, "Road", config)
+			and not Classify.isGroundLike(part, config, groundCache)
+			and not ctx.isIgnored(part)
+			and not Classify.optedOut(part, noneCache)
+			and not ctx.vehicleOf(part)
+		then
+			if not hash then
+				hash, kinded = SpatialHash.new(16), {}
+				for _, other in ctx.solids do
+					if ctx.kindOf(other.part) then
+						table.insert(kinded, other)
+						hash:insert(#kinded, other.min, other.max)
+					end
+				end
+			end
+			if not holdsUpKind(s, hash, kinded) then
+				table.insert(out, part)
+			end
+		end
+		if i % 2000 == 0 then
+			ctx.yield()
+		end
+	end
+	return out
+end
+
+-- How many listed slabs to name in the report line.
+Classify.UNCLASSIFIED_SHOWN = 10
+
+-- The report line for Classify.unclassified's `parts` (`pathOf` names them).
+function Classify.describeUnclassified(parts, pathOf)
+	local counts, names = {}, {}
+	for _, part in parts do
+		local material = Util.prop(part, "Material")
+		local name = if material then material.Name else "?"
+		if not counts[name] then
+			counts[name] = 0
+			table.insert(names, name)
+		end
+		counts[name] += 1
+	end
+	table.sort(names, function(a, b)
+		if counts[a] ~= counts[b] then
+			return counts[a] > counts[b]
+		end
+		return a < b
+	end)
+	local shown = {}
+	for i = 1, math.min(#parts, Classify.UNCLASSIFIED_SHOWN) do
+		shown[i] = pathOf(parts[i])
+	end
+	return ("%d flat slab(s) look like road surfaces (%s) but aren't checked as roads: %s%s — name or tag them Road/Rail/Track (or set BuildGuardKind), or set BuildGuardKind = \"None\" on them or their folder if they aren't roads"):format(
+		#parts,
+		table.concat(names, ", "),
+		table.concat(shown, ", "),
+		if #parts > #shown then (" (first %d)"):format(#shown) else ""
+	)
 end
 
 -- All BaseParts under `root` (including root), skipping Terrain and anything
