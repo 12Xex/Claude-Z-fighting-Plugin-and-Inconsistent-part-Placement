@@ -14,6 +14,13 @@
 	Faces that touch back-to-back (a part resting on another) point opposite
 	ways and are left alone: those faces are hidden, not flickering.
 
+	Seams: each flat overlap's width is its thinnest extent. A pair of part
+	faces overlapping only in strips narrower than zFightSeamWidth (pieces
+	laid edge to edge that overlap by a hair, such as land facets from a
+	generator) is a "zseam" warning, not fixed: it barely shows, and nudging
+	one piece off the other would leave a step. Mesh triangles are never
+	seams: a thin triangle can be one sliver of a wide overlap.
+
 	Far view: in a model seen from far away (zFightViewDistance), same-facing
 	faces need 2 * Config.depthStep(distance) between them. Closer than that,
 	but beyond zFightTolerance, is a "zgap" warning. Under about 130 studs
@@ -134,8 +141,8 @@ local function faceIndex(faces)
 end
 
 -- Same-facing faces of `a` and `b` within `search` of each other that
--- overlap: { faceA, faceB, area, distance, position }. Calls `worked()`
--- once per face pair tested.
+-- overlap: { faceA, faceB, area, distance, position, width }. Calls
+-- `worked()` once per face pair tested.
 local function faceContacts(facesA, facesB, search, minArea, indexOf, worked)
 	local contacts = {}
 	local function test(fa, fb)
@@ -144,9 +151,9 @@ local function faceContacts(facesA, facesB, search, minArea, indexOf, worked)
 			return
 		end
 		local floor = if fa.triangle or fb.triangle then MIN_TRIANGLE_OVERLAP else minArea
-		local area, distance, at = Geometry.coplanarOverlap(fa, fb, search, floor)
+		local area, distance, at, width = Geometry.coplanarOverlap(fa, fb, search, floor)
 		if area then
-			table.insert(contacts, { faceA = fa, faceB = fb, area = area, distance = distance, position = at })
+			table.insert(contacts, { faceA = fa, faceB = fb, area = area, distance = distance, position = at, width = width })
 		end
 	end
 	if #facesA == 0 or #facesB == 0 then
@@ -270,8 +277,25 @@ local function holdsTo(gap)
 	return math.sqrt(gap * Config.NEAR_PLANE * Config.DEPTH_STEPS / 2)
 end
 
--- Turns a pair's contacts into a "zfight" or "zgap" issue, or nil when the
--- contacts are only close enough for some other, far-viewed model.
+-- "0.012" or "2.00" (studs).
+local function widthText(width)
+	return if width < 1 then ("%.3f"):format(width) else ("%.2f"):format(width)
+end
+
+-- ", a strip 0.050 wide" for a contact at least four times as long as it
+-- is wide, else ", 2.00 wide"; "" without a contact.
+local function widthNote(c)
+	if not c then
+		return ""
+	end
+	if c.area >= 4 * c.width * c.width then
+		return (", a strip %s wide"):format(widthText(c.width))
+	end
+	return (", %s wide"):format(widthText(c.width))
+end
+
+-- Turns a pair's contacts into a "zfight", "zgap" or "zseam" issue, or nil
+-- when the contacts are only close enough for some other, far-viewed model.
 local function pairIssue(ctx, a, b, contacts)
 	local base = ctx.config
 	local tolerance = base.zFightTolerance
@@ -299,6 +323,18 @@ local function pairIssue(ctx, a, b, contacts)
 	if #kept == 0 or total < base.zFightMinOverlapArea then
 		return nil
 	end
+	-- The widest overlap between flat part faces. Round surfaces have no
+	-- width, and a mesh's triangles tile its surface, so a thin triangle may
+	-- be one sliver of a wide overlap: neither counts.
+	local flat, widest = 0, nil
+	for _, c in kept do
+		if c.width and not (c.faceA.triangle or c.faceB.triangle) then
+			flat += 1
+			if not widest or c.width > widest.width then
+				widest = c
+			end
+		end
+	end
 
 	local pathA, pathB = ctx.path(a.part), ctx.path(b.part)
 	local issue = {
@@ -312,14 +348,26 @@ local function pairIssue(ctx, a, b, contacts)
 		-- The fix's gap comes from the pair's settings.
 		config = pairConfig,
 		position = largest.position,
+		width = widest and widest.width,
 	}
+	if widest and flat == #kept and widest.width < base.zFightSeamWidth then
+		-- Only thin strips overlap: barely visible, and a nudge would leave
+		-- a step between pieces meant to be flush, so it's left to a person.
+		issue.check, issue.severity, issue.planner = "zseam", "warning", nil
+		issue.message = (
+			"%s and %s overlap in a strip %s studs wide along their shared edge (%s faces, %.2f studs²) at %s: "
+			.. "barely visible; pull the pieces apart in their plane (often a generator overlapping pieces by a hair)"
+		):format(pathA, pathB, widthText(widest.width), contactNames(kept), total, Util.vector(largest.position))
+		return issue
+	end
 	if fighting then
-		issue.message = ("%s and %s z-fight at %s: %s face(s) overlap %.2f studs²"):format(
+		issue.message = ("%s and %s z-fight at %s: %s face(s) overlap %.2f studs²%s"):format(
 			pathA,
 			pathB,
 			Util.vector(largest.position),
 			contactNames(kept),
-			total
+			total,
+			widthNote(widest)
 		)
 	else
 		local source = sources and sources.zFightViewDistance

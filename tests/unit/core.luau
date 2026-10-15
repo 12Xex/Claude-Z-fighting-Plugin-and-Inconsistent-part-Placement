@@ -141,8 +141,8 @@ test("keepPosition: item stays where it was across the face, keeps its heading",
 	near(mark.CFrame.RightVector:Dot(start.RightVector), 1, 1e-3, "heading kept")
 end)
 
-test("layer must be a whole number >= 1", function()
-	expect(not pcall(BG.Layers.lift, 0))
+test("layer must be a whole number >= 0", function()
+	expect(not pcall(BG.Layers.lift, -1))
 	expect(not pcall(BG.Layers.lift, 1.5))
 end)
 

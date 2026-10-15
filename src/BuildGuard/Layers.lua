@@ -5,6 +5,7 @@
 	    Layers.place(marking, road, { layer = 1, u = -10 })
 	    Layers.place(sign, wall, { face = "Front", layer = 1, v = 2 })
 	    Layers.place(arrow, road, { layer = 2, rotation = 90 }) -- on top of layer 1
+	    Layers.place(rib, road, { layer = 0, rotation = 90 })   -- flush on the road
 
 	Convention: the item's Size.Y is its thickness off the surface. Its X axis
 	runs along the face's `u` direction (rotated by `rotation` degrees about the
@@ -17,6 +18,13 @@
 	on the same face need different layers. In a model seen from far away
 	(zFightViewDistance), each layer lifts at least Config.faceGap instead,
 	so the layers don't flicker at that distance.
+
+	Layer 0 rests flush on the face (its bottom on it, no gap of light under
+	it): for raised details that overlap no other layered item (washboard
+	ribs, plates, pads). Its bottom is hidden against the surface, so it
+	can't flicker there; two overlapping layer-0 items still z-fight (their
+	bottoms are coplanar) and are reported. Snapping a road carries its
+	layer-0 items along like any other layer.
 ]]
 
 local Config = require(script.Parent.Config)
@@ -37,10 +45,10 @@ local function faceName(face)
 	return face
 end
 
--- How far layer `layer` sits above the surface.
+-- How far layer `layer` sits above the surface (0 for layer 0).
 function Layers.lift(layer, config)
 	config = config or Config.defaults
-	assert(type(layer) == "number" and layer >= 1 and layer % 1 == 0, "Layers: layer must be a whole number >= 1")
+	assert(type(layer) == "number" and layer >= 0 and layer % 1 == 0, "Layers: layer must be a whole number >= 0")
 	local step = config.layerLift
 	if (config.zFightViewDistance or 0) > 0 then
 		step = math.max(step, Config.faceGap(config))
@@ -65,8 +73,9 @@ function Layers.faceCFrame(surface, face, u, v, rotation)
 	return frame
 end
 
--- Places `item` on `surface`. Options: face, layer (default 1), u, v, rotation,
--- config, keepPosition (take u/v/rotation from where the item is now).
+-- Places `item` on `surface`. Options: face, layer (default 1; 0 rests
+-- flush), u, v, rotation, config, keepPosition (take u/v/rotation from where
+-- the item is now).
 -- Without `config`, the lift follows BuildGuard_layerLift on the surface or
 -- its ancestors.
 -- Returns the item.

@@ -16,9 +16,9 @@
 	cover joins inside it; where it meets roads outside it, the outside
 	settings apply.
 
-	Z-fighting detection (tolerance, minimum overlap, ignored transparency) is
-	global: no model can loosen it. A model can tighten it for distance
-	viewing with zFightViewDistance.
+	Z-fighting detection (tolerance, minimum overlap, seam width, ignored
+	transparency) is global: no model can loosen it. A model can tighten it
+	for distance viewing with zFightViewDistance.
 
 	Place-wide settings are attributes on `workspace` (BG.setProjectConfig).
 	They also apply to models outside workspace (ServerStorage, a clone that
@@ -37,6 +37,11 @@ Config.defaults = {
 	zFightTolerance = 0.01,
 	-- Overlaps smaller than this (studs²) are edge contacts, not z-fighting.
 	zFightMinOverlapArea = 0.01,
+	-- Two parts whose flat faces only overlap in strips narrower than this
+	-- (studs) are a "zseam" warning, not a z-fight to fix: pieces overlapping
+	-- by a hair along an edge (land facets from a generator) barely show, and
+	-- nudging one would leave a step. 0 = off.
+	zFightSeamWidth = 0.03,
 	-- Separation a fix nudge leaves between the two faces. Must be larger than
 	-- zFightTolerance so the re-scan comes back clean.
 	zFightNudge = 0.02,
@@ -63,7 +68,7 @@ Config.defaults = {
 
 	-- Layer offsets (road markings, signs, trim) ------------------------------
 	-- Each layer sits this far above the surface it's placed on:
-	-- layer 1 = 0.05, layer 2 = 0.1, ...
+	-- layer 1 = 0.05, layer 2 = 0.1, ... Layer 0 rests flush on it.
 	layerLift = 0.05,
 
 	-- Roads / rails / tracks ---------------------------------------------------
@@ -158,6 +163,7 @@ Config.defaults = {
 Config.schema = {
 	zFightTolerance = { scope = "global", min = 0.001, max = 0.1 },
 	zFightMinOverlapArea = { scope = "global", min = 0, max = 10 },
+	zFightSeamWidth = { scope = "global", min = 0, max = 1 },
 	zFightNudge = { min = 0.002, max = 0.5 },
 	zFightIgnoreTransparency = { scope = "global", min = 0, max = 1 },
 	zFightViewDistance = { min = 0, max = 5000 },
