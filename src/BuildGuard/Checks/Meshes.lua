@@ -4,13 +4,11 @@
 
 	  * Triangles: when the world can read a MeshPart's mesh (EditableMesh in
 	    Studio, for meshes the place's owner can load), every triangle becomes
-	    a face, so the z-fight check tests the real surface. Meshes it can't
-	    read, meshes over meshTriangleLimit triangles, unions (no readable
-	    geometry) and parts drawn by a SpecialMesh/BlockMesh/CylinderMesh
-	    child are only checked by box: for duplicates and overlapping boxes,
-	    not for z-fighting (a mesh's box isn't its surface). `coverage`
-	    counts them and says why, and keeps the world's notes on a mesh
-	    (coverage.notes, by path).
+	    a face, so the z-fight check tests the real surface. Other meshes,
+	    unions and parts drawn by a mesh child are only checked by box: for
+	    duplicates and overlapping boxes, not for z-fighting (a mesh's box
+	    isn't its surface). `coverage` counts them, says why, and keeps the
+	    world's notes on a mesh (coverage.notes, by path).
 	  * Duplicates: two visible parts of the same class, mesh (or shape),
 	    position, rotation and size. The classic double import. Any class.
 	  * Box overlap: two meshes or unions whose boxes line up and share most
@@ -185,46 +183,48 @@ function Meshes.triangleFaces(triangles, cf, doubleSided)
 	return faces
 end
 
--- Triangle faces for a visible mesh or union `s`, or nil when only its box
--- can be checked. Counts the outcome in `coverage`. Reads each part once:
--- the caller keeps the result.
-function Meshes.load(ctx, s, coverage)
-	local part = s.part
-	if Geometry.meshChild(part) then
-		boxOnly(coverage, Meshes.MESH_CHILD_REASON)
-		return nil
-	elseif not part:IsA("MeshPart") then
-		boxOnly(coverage, Meshes.UNION_REASON)
-		return nil
-	end
+-- The part-local triangles of `part`'s mesh, or nil and why only its box
+-- can be checked. Keeps the world's note on the mesh in `coverage`.
+local function readTriangles(ctx, part, coverage)
 	local config, world = ctx.config, ctx.world
-	if not config.meshTriangles then
-		boxOnly(coverage, "meshTriangles is off")
-		return nil
-	end
-	if not world.meshTriangles then
-		boxOnly(coverage, "this world can't read meshes")
-		return nil
+	if Geometry.meshChild(part) then
+		return nil, Meshes.MESH_CHILD_REASON
+	elseif not part:IsA("MeshPart") then
+		return nil, Meshes.UNION_REASON
+	elseif not config.meshTriangles then
+		return nil, "meshTriangles is off"
+	elseif not world.meshTriangles then
+		return nil, "this world can't read meshes"
 	end
 	-- Reading a mesh can wait on the network in Studio.
 	local ok, triangles, reason, note = pcall(world.meshTriangles, part)
 	ctx.yield()
 	if not ok then
-		triangles, reason = nil, "reading the mesh failed"
+		return nil, "reading the mesh failed"
 	end
-	if ok and note then
+	if note then
 		coverage.notes[ctx.path(part)] = note
 	end
 	if not triangles then
-		boxOnly(coverage, reason or "mesh not readable")
-		return nil
+		return nil, reason or "mesh not readable"
 	end
 	if #triangles > config.meshTriangleLimit then
-		boxOnly(coverage, ("more than meshTriangleLimit (%d) triangles"):format(config.meshTriangleLimit))
+		return nil, ("more than meshTriangleLimit (%d) triangles"):format(config.meshTriangleLimit)
+	end
+	return triangles
+end
+
+-- Triangle faces for a visible mesh or union `s`, or nil when only its box
+-- can be checked. Counts the outcome in `coverage`. Reads each part once:
+-- the caller keeps the result.
+function Meshes.load(ctx, s, coverage)
+	local triangles, reason = readTriangles(ctx, s.part, coverage)
+	if not triangles then
+		boxOnly(coverage, reason)
 		return nil
 	end
 	coverage.meshTriangles += 1
-	return Meshes.triangleFaces(triangles, s.cf, Util.prop(part, "DoubleSided", false) == true)
+	return Meshes.triangleFaces(triangles, s.cf, Util.prop(s.part, "DoubleSided", false) == true)
 end
 
 --------------------------------------------------------------------------------

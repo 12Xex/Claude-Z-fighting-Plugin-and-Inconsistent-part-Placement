@@ -26,7 +26,7 @@ local function component(v, axis)
 end
 Geometry.component = component
 
-local function vec(axis, value)
+local function axisVector(axis, value)
 	if axis == 1 then
 		return Vector3.new(value, 0, 0)
 	elseif axis == 2 then
@@ -34,29 +34,25 @@ local function vec(axis, value)
 	end
 	return Vector3.new(0, 0, value)
 end
-Geometry.axisVector = vec
+Geometry.axisVector = axisVector
+
+-- Part.Shape values that aren't drawn as a block.
+local PART_SHAPES = { Ball = true, Cylinder = true, Wedge = true, CornerWedge = true }
 
 -- "Block" | "Wedge" | "CornerWedge" | "Cylinder" | "Ball" | "Other"
 -- (Other = mesh, union, truss: only its box is known)
 function Geometry.shapeOf(part)
 	if part:IsA("WedgePart") then
 		return "Wedge"
-	end
-	if part:IsA("CornerWedgePart") then
+	elseif part:IsA("CornerWedgePart") then
 		return "CornerWedge"
+	elseif not part:IsA("Part") then
+		return "Other"
 	end
-	if part:IsA("Part") then
-		local ok, shape = pcall(function()
-			return part.Shape.Name
-		end)
-		if ok then
-			if shape == "Ball" or shape == "Cylinder" or shape == "Wedge" or shape == "CornerWedge" then
-				return shape
-			end
-		end
-		return "Block"
-	end
-	return "Other"
+	local ok, shape = pcall(function()
+		return part.Shape.Name
+	end)
+	return if ok and PART_SHAPES[shape] then shape else "Block"
 end
 
 -- The SpecialMesh, BlockMesh or CylinderMesh child that draws a part in
@@ -116,17 +112,52 @@ end
 -- Faces
 --------------------------------------------------------------------------------
 
+-- A rectangle's corners in order round it, as signs on its two axes.
+local RECT_CORNERS = { { -1, -1 }, { 1, -1 }, { 1, 1 }, { -1, 1 } }
+
+-- The local point `along` on `axis` and `b`, `c` on the next two (X->Y->Z->X).
+local function facePoint(axis, along, b, c)
+	local coords = { 0, 0, 0 }
+	coords[axis] = along
+	coords[axis % 3 + 1] = b
+	coords[(axis + 1) % 3 + 1] = c
+	return Vector3.new(coords[1], coords[2], coords[3])
+end
+
 local function rectFace(h, axis, sign)
-	local b, c = axis % 3 + 1, (axis + 1) % 3 + 1
+	local along = sign * component(h, axis)
+	local hb, hc = component(h, axis % 3 + 1), component(h, (axis + 1) % 3 + 1)
 	local points = {}
-	for _, st in { { -1, -1 }, { 1, -1 }, { 1, 1 }, { -1, 1 } } do
-		local coords = { 0, 0, 0 }
-		coords[axis] = sign * component(h, axis)
-		coords[b] = st[1] * component(h, b)
-		coords[c] = st[2] * component(h, c)
-		table.insert(points, Vector3.new(coords[1], coords[2], coords[3]))
+	for i, st in RECT_CORNERS do
+		points[i] = facePoint(axis, along, st[1] * hb, st[2] * hc)
 	end
 	return points
+end
+
+-- A corner wedge's base corners A, B, C, D and its apex E, above B (+X, -Z).
+local function cornerWedgeCorners(h)
+	local A = Vector3.new(-h.X, -h.Y, -h.Z)
+	local B = Vector3.new(h.X, -h.Y, -h.Z)
+	local C = Vector3.new(-h.X, -h.Y, h.Z)
+	local D = Vector3.new(h.X, -h.Y, h.Z)
+	local E = Vector3.new(h.X, h.Y, -h.Z)
+	return A, B, C, D, E
+end
+
+local function worldPoints(cf, points)
+	local out = table.create(#points)
+	for i, p in points do
+		out[i] = cf:PointToWorldSpace(p)
+	end
+	return out
+end
+
+local function average(points)
+	local sum = Vector3.zero
+	for _, p in points do
+		sum += p
+	end
+	return sum / #points
 end
 
 -- Faces in local space: { name, axis?, sign?, normal, points }.
@@ -139,7 +170,7 @@ local function localFaces(shape, h)
 			axis = axis,
 			sign = sign,
 			points = points,
-			normal = normal or vec(axis, sign),
+			normal = normal or axisVector(axis, sign),
 		})
 	end
 	if shape == "Block" then
@@ -165,13 +196,8 @@ local function localFaces(shape, h)
 			Vector3.new(-h.X, -h.Y, -h.Z),
 		}, Vector3.new(0, h.Z, -h.Y).Unit)
 	elseif shape == "CornerWedge" then
-		-- A pyramid on a full rectangular base; the apex is above the
-		-- bottom corner at +X, -Z (front right).
-		local A = Vector3.new(-h.X, -h.Y, -h.Z)
-		local B = Vector3.new(h.X, -h.Y, -h.Z)
-		local C = Vector3.new(-h.X, -h.Y, h.Z)
-		local D = Vector3.new(h.X, -h.Y, h.Z)
-		local E = Vector3.new(h.X, h.Y, -h.Z)
+		-- A pyramid on a full rectangular base.
+		local A, B, C, D, E = cornerWedgeCorners(h)
 		add("Bottom", 2, -1, { A, B, D, C })
 		add("Right", 1, 1, { B, E, D })
 		add("Front", 3, -1, { B, A, E })
@@ -199,20 +225,14 @@ function Geometry.faces(s)
 	end
 	local result = {}
 	for _, f in localFaces(s.shape, s.half) do
-		local points = {}
-		local sum = Vector3.zero
-		for i, p in f.points do
-			local wp = s.cf:PointToWorldSpace(p)
-			points[i] = wp
-			sum += wp
-		end
+		local points = worldPoints(s.cf, f.points)
 		table.insert(result, {
 			name = f.name,
 			axis = f.axis,
 			sign = f.sign,
 			normal = s.cf:VectorToWorldSpace(f.normal),
 			points = points,
-			center = sum / #points,
+			center = average(points),
 		})
 	end
 	s.faces = result
@@ -287,6 +307,16 @@ function Geometry.clipPolygon(subject, clip)
 	return output
 end
 
+-- The lowest and highest of `poly`'s corners along the direction (nx, ny).
+local function span(poly, nx, ny)
+	local lo, hi = math.huge, -math.huge
+	for _, v in poly do
+		local d = v[1] * nx + v[2] * ny
+		lo, hi = math.min(lo, d), math.max(hi, d)
+	end
+	return lo, hi
+end
+
 -- Largest separating gap between two convex polygons (negative = overlapping).
 function Geometry.polygonSeparation(p, q)
 	local best = -math.huge
@@ -297,15 +327,8 @@ function Geometry.polygonSeparation(p, q)
 			local len = math.sqrt(nx * nx + ny * ny)
 			if len > 1e-9 then
 				nx, ny = nx / len, ny / len
-				local pMin, pMax, qMin, qMax = math.huge, -math.huge, math.huge, -math.huge
-				for _, v in p do
-					local d = v[1] * nx + v[2] * ny
-					pMin, pMax = math.min(pMin, d), math.max(pMax, d)
-				end
-				for _, v in q do
-					local d = v[1] * nx + v[2] * ny
-					qMin, qMax = math.min(qMin, d), math.max(qMax, d)
-				end
+				local pMin, pMax = span(p, nx, ny)
+				local qMin, qMax = span(q, nx, ny)
 				best = math.max(best, qMin - pMax, pMin - qMax)
 			end
 		end
@@ -377,6 +400,7 @@ local FLOAT_STEPS = 4 * 2 ^ -23
 local function floatSliver(c)
 	return math.max(MIN_OVERLAP_WIDTH, FLOAT_STEPS * math.max(math.abs(c.X), math.abs(c.Y), math.abs(c.Z)))
 end
+Geometry.floatSliver = floatSliver
 
 -- Faces `fa` and `fb` projected on fa's plane (fa.center is the origin of
 -- u, v) and their overlap there: overlap, pa, pb, u, v.
@@ -387,13 +411,12 @@ local function overlapOnPlane(fa, fb)
 end
 
 -- If faces `fa` and `fb` point the same way, lie within `tolerance` of each
--- other and overlap, returns (overlapArea, distance, centroid, width) where
--- distance is how far fb's plane sits in front of fa's along fa's normal,
--- centroid is the middle of the overlap (on fa's plane) and width is the
--- overlap's thinnest extent (Geometry.polygonWidth). Otherwise nil.
+-- other and overlap, returns overlapArea, distance (how far fb's plane sits
+-- in front of fa's, along fa's normal), centroid (the overlap's middle, on
+-- fa's plane) and width (its thinnest extent); otherwise nil.
 -- Faces laid edge to edge far from the origin overlap by a float-rounding
--- sliver (about 1e-4 studs wide). That never flickers, so an overlap that
--- moving a face by less than MIN_OVERLAP_WIDTH would clear doesn't count.
+-- sliver that never flickers, so an overlap that moving a face by less than
+-- floatSliver would clear doesn't count.
 function Geometry.coplanarOverlap(fa, fb, tolerance, minArea)
 	if fa.normal:Dot(fb.normal) < 1 - 1e-4 then
 		return nil
@@ -417,6 +440,7 @@ function Geometry.coplanarOverlap(fa, fb, tolerance, minArea)
 	return area, distance, fa.center + u * cx + v * cy, Geometry.polygonWidth(clipped)
 end
 
+-- The inverse of `project`: plane points back to world points.
 local function toWorld(poly, origin, u, v)
 	local points = table.create(#poly)
 	for i, p in poly do
@@ -502,17 +526,31 @@ local MIN_PIECE_AREA = 1e-9
 -- small covers over a huge overlap); what's left then counts as open.
 local MAX_OPEN_PIECES = 512
 
+-- Cuts the convex, counter-clockwise `cut` out of the convex `piece`: what
+-- lies right of one of its edges stays open and goes into `rest`.
+local function cutOut(piece, cut, rest)
+	local inside = piece
+	for i = 1, #cut do
+		local outside
+		inside, outside = splitPolygon(inside, cut[i], cut[i % #cut + 1])
+		if #outside >= 3 and Geometry.polygonArea(outside) > MIN_PIECE_AREA then
+			table.insert(rest, outside)
+		end
+		if #inside < 3 then
+			break
+		end
+	end
+end
+
 -- How much of the overlap of same-facing faces `fa` and `fb` (as
 -- coplanarOverlap finds it) the faces `covers` hide: faces pointing the
--- other way that lie on it, back to back (a road resting on both). The
--- covered part is the union of the covers: the open part is kept as convex
--- pieces and each cover is cut out of them in turn, so covers overlapping
--- each other count once. Each cover is grown by the float rounding
--- coplanarOverlap ignores, so one built flush with the overlap's edges (or
--- with the next cover's) covers all of it, far from the origin too.
--- Returns coveredArea, overlapArea, open: the pieces left open, each a
--- convex polygon of world points on fa's plane (0, 0, {} without an
--- overlap).
+-- other way, back to back on it (a road resting on both). Each cover is cut
+-- out of the open pieces in turn, so covers overlapping each other count
+-- once. Each is first grown by the float rounding coplanarOverlap ignores,
+-- so covers built flush with the overlap's edges, or with each other, leave
+-- no slit, far from the origin too.
+-- Returns coveredArea, overlapArea and the pieces left open (convex polygons
+-- of world points on fa's plane); 0, 0, {} without an overlap.
 function Geometry.overlapCover(fa, fb, covers)
 	local overlap, _, _, u, v = overlapOnPlane(fa, fb)
 	if #overlap < 3 then
@@ -534,20 +572,8 @@ function Geometry.overlapCover(fa, fb, covers)
 			local x0, y0, x1, y1 = polygonBounds(piece)
 			if x0 >= cx1 or cx0 >= x1 or y0 >= cy1 or cy0 >= y1 then
 				table.insert(rest, piece)
-				continue
-			end
-			-- What lies right of one of the cut's edges stays open; what's
-			-- left of every edge is covered.
-			local inside = piece
-			for i = 1, #cut do
-				local outside
-				inside, outside = splitPolygon(inside, cut[i], cut[i % #cut + 1])
-				if #outside >= 3 and Geometry.polygonArea(outside) > MIN_PIECE_AREA then
-					table.insert(rest, outside)
-				end
-				if #inside < 3 then
-					break
-				end
+			else
+				cutOut(piece, cut, rest)
 			end
 		end
 		open = rest
@@ -561,28 +587,31 @@ function Geometry.overlapCover(fa, fb, covers)
 	return math.max(area - left, 0), area, pieces
 end
 
+local function turn(o, a, b)
+	return (a[1] - o[1]) * (b[2] - o[2]) - (a[2] - o[2]) * (b[1] - o[1])
+end
+
+-- Adds `p` to half a hull, dropping the points it leaves without a left turn.
+local function extendHull(half, p)
+	while #half >= 2 and turn(half[#half - 1], half[#half], p) <= 1e-12 do
+		table.remove(half)
+	end
+	table.insert(half, p)
+end
+
 -- Convex hull of 2D points, counter-clockwise (Andrew's monotone chain).
 local function convexHull(points)
 	table.sort(points, function(a, b)
 		return a[1] < b[1] or (a[1] == b[1] and a[2] < b[2])
 	end)
-	local function turn(o, a, b)
-		return (a[1] - o[1]) * (b[2] - o[2]) - (a[2] - o[2]) * (b[1] - o[1])
-	end
 	local lower, upper = {}, {}
 	for _, p in points do
-		while #lower >= 2 and turn(lower[#lower - 1], lower[#lower], p) <= 1e-12 do
-			table.remove(lower)
-		end
-		table.insert(lower, p)
+		extendHull(lower, p)
 	end
 	for i = #points, 1, -1 do
-		local p = points[i]
-		while #upper >= 2 and turn(upper[#upper - 1], upper[#upper], p) <= 1e-12 do
-			table.remove(upper)
-		end
-		table.insert(upper, p)
+		extendHull(upper, points[i])
 	end
+	-- Each half ends where the other starts.
 	table.remove(lower)
 	table.remove(upper)
 	for _, p in upper do
@@ -653,11 +682,7 @@ end
 -- something: its corners pulled `inset` studs toward its middle (at most
 -- halfway), then the middle.
 function Geometry.polygonSamples(points, inset)
-	local middle = Vector3.zero
-	for _, p in points do
-		middle += p
-	end
-	middle /= #points
+	local middle = average(points)
 	local samples = table.create(#points + 1)
 	for i, p in points do
 		local toward = middle - p
@@ -668,7 +693,29 @@ function Geometry.polygonSamples(points, inset)
 	return samples
 end
 
-Geometry.floatSliver = floatSliver
+-- Is (x, y) on the same side of every edge of convex `poly` (either winding),
+-- at least `inset` from each?
+local function insideBy(poly, x, y, inset)
+	local sign = 0
+	for i, a in poly do
+		local b = poly[i % #poly + 1]
+		local ex, ey = b[1] - a[1], b[2] - a[2]
+		local length = math.sqrt(ex * ex + ey * ey)
+		if length > 1e-9 then
+			local d = (ex * (y - a[2]) - ey * (x - a[1])) / length
+			if math.abs(d) < inset then
+				return false
+			end
+			local s = if d > 0 then 1 else -1
+			if sign == 0 then
+				sign = s
+			elseif s ~= sign then
+				return false
+			end
+		end
+	end
+	return true
+end
 
 -- polygonSamples plus a grid over the (convex, planar) polygon at most
 -- `spacing` apart, coarser if that would pass `maxSamples`: enough to find
@@ -688,44 +735,16 @@ function Geometry.polygonGrid(points, inset, spacing, maxSamples)
 	if n.Magnitude < 1e-9 then
 		return samples
 	end
-	n = n.Unit
-	local u, v = planeBasis(n)
+	local u, v = planeBasis(n.Unit)
 	local origin = points[1]
 	local flat = project(points, origin, u, v)
-	local u0, u1, v0, v1 = math.huge, -math.huge, math.huge, -math.huge
-	for _, q in flat do
-		u0, u1 = math.min(u0, q[1]), math.max(u1, q[1])
-		v0, v1 = math.min(v0, q[2]), math.max(v1, q[2])
-	end
+	local u0, v0, u1, v1 = polygonBounds(flat)
 	local step = math.max(spacing, math.sqrt((u1 - u0) * (v1 - v0) / math.max(maxSamples, 1)))
-	-- Inside a convex polygon: on the same side of every edge (either winding).
-	local function within(x, y)
-		local sign = 0
-		for i, a in flat do
-			local b = flat[i % #flat + 1]
-			local ex, ey = b[1] - a[1], b[2] - a[2]
-			local cross = ex * (y - a[2]) - ey * (x - a[1])
-			local length = math.sqrt(ex * ex + ey * ey)
-			if length > 1e-9 then
-				local d = cross / length
-				if math.abs(d) < inset then
-					return false
-				end
-				local s = if d > 0 then 1 else -1
-				if sign == 0 then
-					sign = s
-				elseif s ~= sign then
-					return false
-				end
-			end
-		end
-		return true
-	end
 	local x = u0 + step / 2
 	while x < u1 do
 		local y = v0 + step / 2
 		while y < v1 do
-			if within(x, y) then
+			if insideBy(flat, x, y, inset) then
 				table.insert(samples, origin + u * x + v * y)
 			end
 			y += step
@@ -767,13 +786,7 @@ function Geometry.localVertices(shape, h)
 			Vector3.new(h.X, h.Y, h.Z),
 		}
 	elseif shape == "CornerWedge" then
-		return {
-			Vector3.new(-h.X, -h.Y, -h.Z),
-			Vector3.new(h.X, -h.Y, -h.Z),
-			Vector3.new(-h.X, -h.Y, h.Z),
-			Vector3.new(h.X, -h.Y, h.Z),
-			Vector3.new(h.X, h.Y, -h.Z),
-		}
+		return { cornerWedgeCorners(h) }
 	end
 	return nil
 end
@@ -782,15 +795,7 @@ end
 function Geometry.vertices(s)
 	if s.vertices == nil then
 		local lv = Geometry.localVertices(s.shape, s.half)
-		if not lv then
-			s.vertices = false
-		else
-			local out = {}
-			for i, p in lv do
-				out[i] = s.cf:PointToWorldSpace(p)
-			end
-			s.vertices = out
-		end
+		s.vertices = if lv then worldPoints(s.cf, lv) else false
 	end
 	return s.vertices or nil
 end
@@ -894,10 +899,8 @@ end
 -- (always including the corners and centre), pulled in from the edges by
 -- `inset` (fraction of each half-extent, capped at `maxInset` studs).
 function Geometry.faceSamples(s, faceName, inset, maxInset, spacing)
-	local as = Geometry.FACE_AXIS[faceName]
-	local axis, sign = as[1], as[2]
-	local b, c = axis % 3 + 1, (axis + 1) % 3 + 1
-	local hb, hc = component(s.half, b), component(s.half, c)
+	local axis, sign = table.unpack(Geometry.FACE_AXIS[faceName])
+	local hb, hc = component(s.half, axis % 3 + 1), component(s.half, (axis + 1) % 3 + 1)
 	local ib = math.max(hb - math.min(hb * inset, maxInset), 0)
 	local ic = math.max(hc - math.min(hc * inset, maxInset), 0)
 	-- An even number of intervals keeps the centre in the grid.
@@ -906,14 +909,12 @@ function Geometry.faceSamples(s, faceName, inset, maxInset, spacing)
 		return if n % 2 == 1 then n + 1 else n
 	end
 	local nb, nc = count(ib), count(ic)
+	local along = sign * component(s.half, axis)
 	local samples = {}
 	for i = 0, nb do
 		for j = 0, nc do
-			local coords = { 0, 0, 0 }
-			coords[axis] = sign * component(s.half, axis)
-			coords[b] = -ib + 2 * ib * i / nb
-			coords[c] = -ic + 2 * ic * j / nc
-			table.insert(samples, s.cf:PointToWorldSpace(Vector3.new(coords[1], coords[2], coords[3])))
+			local p = facePoint(axis, along, -ib + 2 * ib * i / nb, -ic + 2 * ic * j / nc)
+			table.insert(samples, s.cf:PointToWorldSpace(p))
 		end
 	end
 	return samples
@@ -923,8 +924,8 @@ end
 function Geometry.topCorners(s)
 	local h = s.half
 	local out = {}
-	for _, st in { { -1, -1 }, { 1, -1 }, { 1, 1 }, { -1, 1 } } do
-		table.insert(out, s.cf:PointToWorldSpace(Vector3.new(st[1] * h.X, h.Y, st[2] * h.Z)))
+	for i, st in RECT_CORNERS do
+		out[i] = s.cf:PointToWorldSpace(Vector3.new(st[1] * h.X, h.Y, st[2] * h.Z))
 	end
 	return out
 end
