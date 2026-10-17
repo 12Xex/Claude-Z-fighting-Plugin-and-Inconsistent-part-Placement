@@ -105,11 +105,7 @@ local function topHeightAt(s, x, z)
 	return p.Y - (n.X * (x - p.X) + n.Z * (z - p.Z)) / n.Y
 end
 
--- ", set on Map/Hills" when a limit came from a BuildGuard_ attribute.
-local function setOn(ctx, sources, key)
-	local source = sources[key]
-	return if source then ", set on " .. ctx.path(source) else ""
-end
+local setOn = Ground.setOn
 
 --------------------------------------------------------------------------------
 -- Edges: the step from the ground beside a road up onto it
@@ -141,13 +137,7 @@ end
 -- and vehicles.
 local function edgeIgnore(part, ctx)
 	return function(instance)
-		if instance == part or instance:IsDescendantOf(part) then
-			return true
-		end
-		if not instance:IsA("BasePart") or ctx.world.isTerrain(instance) then
-			return false
-		end
-		return Classify.isLayered(instance) or ctx.isIgnored(instance) or ctx.vehicleOf(instance) ~= nil
+		return Ground.looksThrough(part, ctx, instance) == true
 	end
 end
 
@@ -191,20 +181,21 @@ function Drivability.edgeSteps(ctx, s, config)
 	for _, edge in EDGES do
 		local n = s.axes[edge.axis] * edge.sign
 		local flat = Vector3.new(n.X, 0, n.Z)
-		if flat.Magnitude > 1e-6 then
-			local points = edgePoints(s, edge, config.sampleSpacing)
-			local worst, at, measured = nil, nil, 0
-			for _, point in points do
-				local step = stepAt(ctx, point, flat.Unit, config, ignore, drivable, groundCache)
-				if step then
-					measured += 1
-					if not worst or math.abs(step) > math.abs(worst) then
-						worst, at = step, point
-					end
+		if flat.Magnitude <= 1e-6 then
+			continue
+		end
+		local points = edgePoints(s, edge, config.sampleSpacing)
+		local worst, at, measured = nil, nil, 0
+		for _, point in points do
+			local step = stepAt(ctx, point, flat.Unit, config, ignore, drivable, groundCache)
+			if step then
+				measured += 1
+				if not worst or math.abs(step) > math.abs(worst) then
+					worst, at = step, point
 				end
 			end
-			table.insert(out, { name = edge.name, step = worst, position = at, measured = measured, samples = #points })
 		end
+		table.insert(out, { name = edge.name, step = worst, position = at, measured = measured, samples = #points })
 	end
 	return out
 end
@@ -299,40 +290,23 @@ local function joinIssues(ctx, ra, rb, issues)
 	local at = Vector3.new(jx, math.max(ya, yb), jz)
 	table.insert(ra.joins, at)
 	table.insert(rb.joins, at)
-	local pathA, pathB = ctx.path(a.part), ctx.path(b.part)
-	if step > config.maxLedge then
+	-- `text` formats the value, the two paths, the junction, the limit and
+	-- where the limit was set.
+	local function flag(check, value, text, key)
 		table.insert(issues, {
-			check = "ledge",
+			check = check,
 			severity = "warning",
 			parts = { a.part, b.part },
 			position = at,
-			value = step,
-			message = ("Ledge of %.2f studs between %s and %s at %s (limit %.2f%s)"):format(
-				step,
-				pathA,
-				pathB,
-				Util.vector(at),
-				config.maxLedge,
-				setOn(ctx, sources, "maxLedge")
-			),
+			value = value,
+			message = text:format(value, ctx.path(a.part), ctx.path(b.part), Util.vector(at), config[key], setOn(ctx, sources, key)),
 		})
 	end
+	if step > config.maxLedge then
+		flag("ledge", step, "Ledge of %.2f studs between %s and %s at %s (limit %.2f%s)", "maxLedge")
+	end
 	if angle > config.maxSlopeChange then
-		table.insert(issues, {
-			check = "slope",
-			severity = "warning",
-			parts = { a.part, b.part },
-			position = at,
-			value = angle,
-			message = ("Slope change of %.1f° between %s and %s at %s (limit %.1f°%s)"):format(
-				angle,
-				pathA,
-				pathB,
-				Util.vector(at),
-				config.maxSlopeChange,
-				setOn(ctx, sources, "maxSlopeChange")
-			),
-		})
+		flag("slope", angle, "Slope change of %.1f° between %s and %s at %s (limit %.1f°%s)", "maxSlopeChange")
 	end
 end
 

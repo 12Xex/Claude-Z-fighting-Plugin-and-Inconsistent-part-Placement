@@ -66,6 +66,11 @@ Classify.ROAD_MIN_WIDTH = 4
 -- land a hair under cos 45° at exactly 45°.
 local NAME_MIN_UP = math.cos(math.rad(45)) - 1e-4
 
+-- The unit normal of a wedge's slope.
+local function wedgeUp(cf, size)
+	return cf:VectorToWorldSpace(Vector3.new(0, size.Z, -size.Y).Unit)
+end
+
 -- Is `part` flat enough to be a road/rail/track or ground by its name?
 function Classify.isFlat(part, config)
 	if part:IsA("Part") then
@@ -109,9 +114,7 @@ local function looksLike(part, kind, config)
 	end
 	local size, cf = part.Size, part.CFrame
 	-- A box looks the same either way up; a wedge upside down has no top.
-	local up = if shape == "Wedge"
-		then cf:VectorToWorldSpace(Vector3.new(0, size.Z, -size.Y).Unit).Y
-		else math.abs(cf.UpVector.Y)
+	local up = if shape == "Wedge" then wedgeUp(cf, size).Y else math.abs(cf.UpVector.Y)
 	if up < NAME_MIN_UP then
 		return false
 	end
@@ -133,10 +136,10 @@ function Classify.kind(part, config, world, inVehicle)
 		return nil
 	end
 	local kind = namedKind(part, config)
-	if not kind or not looksLike(part, kind, config) or (inVehicle and inVehicle(part)) then
-		return nil
+	if kind and looksLike(part, kind, config) and not (inVehicle and inVehicle(part)) then
+		return kind
 	end
-	return kind
+	return nil
 end
 
 -- Items placed with Layers (markings, signs, trim) carry this attribute.
@@ -144,15 +147,13 @@ function Classify.isLayered(part)
 	return part:GetAttribute("BuildGuardLayer") ~= nil
 end
 
-local UNMARKED = {}
-
--- BuildGuardGround on `instance` or its nearest marked ancestor: true,
--- false or nil (not set). Pass a table as `cache` to reuse answers.
-function Classify.groundMarker(instance, cache)
+-- Walks up from `instance` to the first node `test` gives an answer (not
+-- nil) for, else returns `default`. Every node passed caches the result.
+local function upTheTree(instance, cache, default, test)
 	cache = cache or {}
 	local chain = {}
 	local node = instance
-	local result = UNMARKED
+	local result = default
 	while node do
 		local known = cache[node]
 		if known ~= nil then
@@ -160,9 +161,9 @@ function Classify.groundMarker(instance, cache)
 			break
 		end
 		table.insert(chain, node)
-		local marker = Util.marker(node, "BuildGuardGround")
-		if marker ~= nil then
-			result = marker
+		local answer = test(node)
+		if answer ~= nil then
+			result = answer
 			break
 		end
 		node = node.Parent
@@ -170,6 +171,17 @@ function Classify.groundMarker(instance, cache)
 	for _, n in chain do
 		cache[n] = result
 	end
+	return result
+end
+
+local UNMARKED = {}
+
+-- BuildGuardGround on `instance` or its nearest marked ancestor: true,
+-- false or nil (not set). Pass a table as `cache` to reuse answers.
+function Classify.groundMarker(instance, cache)
+	local result = upTheTree(instance, cache, UNMARKED, function(node)
+		return Util.marker(node, "BuildGuardGround")
+	end)
 	if result == UNMARKED then
 		return nil
 	end
@@ -214,27 +226,9 @@ end
 -- Is `instance` at or under an ignored instance? Pass a table as `cache` to
 -- reuse answers across calls.
 function Classify.isIgnored(instance, cache)
-	cache = cache or {}
-	local chain = {}
-	local node = instance
-	local result = false
-	while node do
-		local known = cache[node]
-		if known ~= nil then
-			result = known
-			break
-		end
-		table.insert(chain, node)
-		if Classify.ignoresItself(node) then
-			result = true
-			break
-		end
-		node = node.Parent
-	end
-	for _, n in chain do
-		cache[n] = result
-	end
-	return result
+	return upTheTree(instance, cache, false, function(node)
+		return Classify.ignoresItself(node) or nil
+	end)
 end
 
 --------------------------------------------------------------------------------
@@ -244,27 +238,9 @@ end
 -- Is `instance` at or under an instance whose BuildGuardKind is "None"?
 -- Pass a table as `cache` to reuse answers across calls.
 function Classify.optedOut(instance, cache)
-	cache = cache or {}
-	local chain = {}
-	local node = instance
-	local result = false
-	while node do
-		local known = cache[node]
-		if known ~= nil then
-			result = known
-			break
-		end
-		table.insert(chain, node)
-		if node:GetAttribute("BuildGuardKind") == "None" then
-			result = true
-			break
-		end
-		node = node.Parent
-	end
-	for _, n in chain do
-		cache[n] = result
-	end
-	return result
+	return upTheTree(instance, cache, false, function(node)
+		return node:GetAttribute("BuildGuardKind") == "None" or nil
+	end)
 end
 
 -- A slab for the note is at least this wide and this long (studs, its
@@ -292,18 +268,16 @@ Classify.FOOTING_COVER = 1.2
 -- wedge's slope runs through its centre; a block may be upside down).
 local function topPlane(s)
 	if s.shape == "Wedge" then
-		return s.pos, s.cf:VectorToWorldSpace(Vector3.new(0, s.size.Z, -s.size.Y).Unit)
+		return s.pos, wedgeUp(s.cf, s.size)
 	end
 	local up = if s.axes[2].Y < 0 then -s.axes[2] else s.axes[2]
 	return s.pos + up * s.half.Y, up
 end
 
--- Is solid `s` shaped like a slab to drive on? Flat by the name rules,
--- not a corner wedge or a layered item, its top within NOTE_MAX_TILT of
--- level, and at least NOTE_MIN_WIDTH by NOTE_MIN_LENGTH across. Under
--- ROAD_MIN_WIDTH across, only a strip (NOTE_STRIP_LENGTH long and
--- NOTE_STRIP_RATIO times longer than wide) or a slab named like a road
--- (its first word one of kindNameWords).
+-- Is solid `s` shaped like a slab to drive on? Flat by the name rules, not
+-- a corner wedge or layered, its top within NOTE_MAX_TILT of level, at
+-- least NOTE_MIN_WIDTH by NOTE_MIN_LENGTH, and under ROAD_MIN_WIDTH across
+-- only a strip or a slab named like a road.
 local function slabLike(s, config)
 	local part = s.part
 	if s.shape == "CornerWedge" or Classify.isLayered(part) or not Classify.isFlat(part, config) then
@@ -347,6 +321,20 @@ local function footprint(s)
 	return out, a, b
 end
 
+-- Is every corner of `outline` (at height `topY`) within road `k`'s
+-- footprint, along its level axes `a` and `b`, plus `reach`?
+local function withinFootprint(k, outline, topY, a, b, reach)
+	local half = { k.half.X, k.half.Y, k.half.Z }
+	for _, corner in outline do
+		local lp = k.cf:PointToObjectSpace(Vector3.new(corner[1], topY, corner[2]))
+		local c = { lp.X, lp.Y, lp.Z }
+		if math.abs(c[a]) > half[a] + reach or math.abs(c[b]) > half[b] + reach then
+			return false
+		end
+	end
+	return true
+end
+
 -- Do roads/rails/tracks (among `kinded`, found through `hash`, each
 -- resting its `lifts[i]` above a support) resting on `s`'s top cover it, so
 -- `s` holds them up (a footing, a plinth)? A sunk road reaches below that
@@ -363,45 +351,47 @@ local function holdsUpKind(s, hash, kinded, lifts)
 		local kOutline, a, b = footprint(k)
 		local overlap = Geometry.clipPolygon(outline, kOutline)
 		local overlapArea = if #overlap >= 3 then Geometry.polygonArea(overlap) else 0
-		if overlapArea > 1e-3 then
-			-- The top's height where they overlap.
-			local x, z = 0, 0
-			for _, p in overlap do
-				x += p[1] / #overlap
-				z += p[2] / #overlap
+		if overlapArea <= 1e-3 then
+			continue
+		end
+		-- The top's height where they overlap.
+		local x, z = 0, 0
+		for _, p in overlap do
+			x += p[1] / #overlap
+			z += p[2] / #overlap
+		end
+		local topY = point.Y - (normal.X * (x - point.X) + normal.Z * (z - point.Z)) / normal.Y
+		if k.min.Y <= topY + 0.5 + lifts[i] and k.max.Y >= topY then
+			if withinFootprint(k, outline, topY, a, b, reach) then
+				return true
 			end
-			local topY = point.Y - (normal.X * (x - point.X) + normal.Z * (z - point.Z)) / normal.Y
-			if k.min.Y <= topY + 0.5 + lifts[i] and k.max.Y >= topY then
-				-- Within the road's footprint plus the margin, corner by corner.
-				local half = { k.half.X, k.half.Y, k.half.Z }
-				local within = true
-				for _, corner in outline do
-					local lp = k.cf:PointToObjectSpace(Vector3.new(corner[1], topY, corner[2]))
-					local c = { lp.X, lp.Y, lp.Z }
-					if math.abs(c[a]) > half[a] + reach or math.abs(c[b]) > half[b] + reach then
-						within = false
-						break
-					end
-				end
-				if within then
-					return true
-				end
-				covered += overlapArea
-			end
+			covered += overlapArea
 		end
 	end
 	return area <= Classify.FOOTING_COVER * covered
 end
 
--- Flat slabs that look like road surfaces but that no check treats as a
--- road, rail or track, in scan order: flat by the name rules, not a corner
--- wedge, top within NOTE_MAX_TILT of level, at least NOTE_MIN_WIDTH by
--- NOTE_MIN_LENGTH across (a strip or named like a road when under
--- ROAD_MIN_WIDTH: see slabLike), and made of a material in
--- config.roadLikeMaterials. Left out: ground, layered and ignored parts,
--- vehicle parts, anything at or under an instance with BuildGuardKind =
--- "None", and slabs the roads/rails/tracks resting on them cover (a
--- footing, a plinth: see holdsUpKind). Reads properties only: no raycasts.
+-- Every road/rail/track in `ctx`, in a hash by its box reaching down by its
+-- lift to the support it rests on. Returns the hash, the solids and lifts.
+local function kindedHash(ctx)
+	local hash, kinded, lifts = SpatialHash.new(16), {}, {}
+	for _, other in ctx.solids do
+		local kind = ctx.kindOf(other.part)
+		if kind then
+			local lift = math.max(ctx.configFor(other.part)[Classify.LIFT_KEY[kind]], 0)
+			table.insert(kinded, other)
+			table.insert(lifts, lift)
+			hash:insert(#kinded, other.min - Vector3.new(0, lift, 0), other.max)
+		end
+	end
+	return hash, kinded, lifts
+end
+
+-- Flat slabs that look like road surfaces (see slabLike) and are made of a
+-- material in config.roadLikeMaterials, but that no check treats as a road,
+-- rail or track, in scan order. Left out: ground, layered, ignored and
+-- vehicle parts, anything opted out (BuildGuardKind = "None"), and
+-- footings (see holdsUpKind). Reads properties only: no raycasts.
 function Classify.unclassified(ctx)
 	local config = ctx.config
 	local materials = {}
@@ -425,17 +415,7 @@ function Classify.unclassified(ctx)
 			and not ctx.vehicleOf(part)
 		then
 			if not hash then
-				hash, kinded, lifts = SpatialHash.new(16), {}, {}
-				for _, other in ctx.solids do
-					local kind = ctx.kindOf(other.part)
-					if kind then
-						-- Its box reaches down by its lift, to the support it rests on.
-						local lift = math.max(ctx.configFor(other.part)[Classify.LIFT_KEY[kind]], 0)
-						table.insert(kinded, other)
-						table.insert(lifts, lift)
-						hash:insert(#kinded, other.min - Vector3.new(0, lift, 0), other.max)
-					end
-				end
+				hash, kinded, lifts = kindedHash(ctx)
 			end
 			if not holdsUpKind(s, hash, kinded, lifts) then
 				table.insert(out, part)
@@ -626,14 +606,9 @@ function Classify.wheels(model)
 	local anySpinning = next(spinning) ~= nil
 	local out = {}
 	for _, p in parts do
-		local marker = Util.marker(p, "BuildGuardWheel")
-		local isWheel
-		if marker ~= nil then
-			isWheel = marker
-		elseif anySpinning then
-			isWheel = spinning[p] == true
-		else
-			isWheel = Classify.isWheelName(p.Name)
+		local isWheel = Util.marker(p, "BuildGuardWheel")
+		if isWheel == nil then
+			isWheel = if anySpinning then spinning[p] == true else Classify.isWheelName(p.Name)
 		end
 		if isWheel then
 			table.insert(out, p)
