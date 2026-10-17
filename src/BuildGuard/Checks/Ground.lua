@@ -22,23 +22,17 @@
 	issue's position is the part's bottom centre.
 
 	Gaps (warning, no fix): a straight part can rest on the highest ground
-	under it and still hang over dips. For a part that's on the ground (not
-	off it, not buried), the same columns measure the gap between its
-	resting face and what shows below it at the samples within max(2,
-	sampleSpacing) studs of that face's edges, where a gap shows. The
-	biggest one is reported when it's over maxHover plus its kind's lift
-	(if positive: a rail's room for sleepers isn't a gap). What shows is
-	the snap's ground, except that light passes through invisible parts
-	(Transparency at or above zFightIgnoreTransparency, as for the z-fight
-	scan) and stops at a water surface above the ground. A footing under
-	the part is ground like anything else starting below it, so it closes
-	the gap if it's visible. Where an edge passes over a drop deeper than
-	connectMaxStep (or no ground at all), that stretch is a span (a bridge,
-	an overpass, an end out over a cliff) and doesn't count, nor do the
-	banks sloping down into it: the samples either side whose gaps keep
-	falling as the edge runs away from the drop, out to where it's back on
-	the ground (its gap within the limit). A level dip that runs up to the
-	drop isn't a bank, and the rest of the edge still counts.
+	under it and still hang over dips. For a part on the ground, the samples
+	within max(2, sampleSpacing) studs of its resting face's edges measure
+	the gap down to what shows below: the snap's ground, seen through
+	invisible parts (Transparency at or above zFightIgnoreTransparency) and
+	stopping at water. The biggest gap is reported when it's over maxHover
+	plus its kind's lift (if positive: a rail's room for sleepers isn't a
+	gap). A visible footing closes a gap like any ground. Where an edge
+	passes over a drop deeper than connectMaxStep (or no ground) it's a span
+	(a bridge, an end over a cliff) and doesn't count, nor do the banks
+	falling into it, out to where the edge is back on the ground. A level
+	dip running up to the drop isn't a bank.
 
 	Tilted parts (ramps, slopes) are skipped: a ramp is meant to leave the
 	ground. A block lying upside down rests on its Top face (a box looks the
@@ -57,8 +51,10 @@ local Util = require(script.Parent.Parent.Util)
 
 local Ground = {}
 
-local function isDescendantOf(instance, ancestor)
-	return instance:IsDescendantOf(ancestor)
+-- ", set on Map/Hills" when config key `key` came from a BuildGuard_ attribute.
+function Ground.setOn(ctx, sources, key)
+	local source = sources[key]
+	return if source then ", set on " .. ctx.path(source) else ""
 end
 
 --------------------------------------------------------------------------------
@@ -113,6 +109,22 @@ end
 -- Snapping
 --------------------------------------------------------------------------------
 
+-- The rule every probe from `part` shares: true to look through `instance`
+-- (the part itself, layered items, ignored things, vehicles), false to stop
+-- at it (terrain, or anything not a part), nil to leave it to the caller.
+function Ground.looksThrough(part, ctx, instance)
+	if instance == part or instance:IsDescendantOf(part) then
+		return true
+	end
+	if not instance:IsA("BasePart") or ctx.world.isTerrain(instance) then
+		return false
+	end
+	if Classify.isLayered(instance) or ctx.isIgnored(instance) or ctx.vehicleOf(instance) ~= nil then
+		return true
+	end
+	return nil
+end
+
 -- Raycast filter for snapping solid `s`. Ground under a part has to start
 -- below the part's bottom; anything starting at or above it (markings, crates,
 -- rails on a track bed) is resting on the part, not holding it up. Layered
@@ -122,14 +134,9 @@ function Ground.ignoreFor(s, ctx)
 	local part = s.part
 	local kind = ctx.kindOf(part)
 	return function(instance)
-		if instance == part or isDescendantOf(instance, part) then
-			return true
-		end
-		if not instance:IsA("BasePart") or ctx.world.isTerrain(instance) then
-			return false
-		end
-		if Classify.isLayered(instance) or ctx.isIgnored(instance) or ctx.vehicleOf(instance) ~= nil then
-			return true
+		local rule = Ground.looksThrough(part, ctx, instance)
+		if rule ~= nil then
+			return rule
 		end
 		if kind ~= nil and ctx.kindOf(instance) == kind then
 			return true
@@ -152,13 +159,14 @@ local function riders(s, ctx)
 	local up = upSign(s)
 	local box = s.cf * CFrame.new(0, up * (s.half.Y + 1), 0)
 	for _, other in ctx.world.partsInBox(box, Vector3.new(s.size.X, 2, s.size.Z)) do
-		if not seen[other] and other ~= s.part and Classify.isLayered(other) and not ctx.isIgnored(other) then
-			local lp = s.cf:PointToObjectSpace(other.CFrame.Position)
-			local above = up * lp.Y
-			if math.abs(lp.X) <= s.half.X and math.abs(lp.Z) <= s.half.Z and above >= s.half.Y and above <= s.half.Y + 2 then
-				seen[other] = true
-				table.insert(out, other)
-			end
+		if seen[other] or other == s.part or not Classify.isLayered(other) or ctx.isIgnored(other) then
+			continue
+		end
+		local lp = s.cf:PointToObjectSpace(other.CFrame.Position)
+		local above = up * lp.Y
+		if math.abs(lp.X) <= s.half.X and math.abs(lp.Z) <= s.half.Z and above >= s.half.Y and above <= s.half.Y + 2 then
+			seen[other] = true
+			table.insert(out, other)
 		end
 	end
 	return out
@@ -317,7 +325,6 @@ end
 
 -- Samples this close (studs) across an edge lie in the same row along it.
 local SAME_ROW = 0.05
--- A bank's gap falls by more than this from one sample to the next.
 -- A bank falls at least this much per stud along the edge (about 6°): a
 -- ditch that only drains towards a drop isn't one.
 local BANK_SLOPE = 0.1
@@ -348,19 +355,35 @@ local function dropSpans(row, found, limit, step, dropped)
 	end
 end
 
--- The biggest gap between `s`'s resting face and the ground under it where
--- it shows: at the samples within max(2, sampleSpacing) studs of the face's
--- edges, from a measure `m`. Returns { gap, position, edge, water, through }
--- (edges named by the part's own axes), or nil when no such sample found
--- ground. A sunk part's gaps are negative. Where an edge passes over a drop
--- deeper than connectMaxStep it's a span (a bridge, an overpass, an end
--- out over a cliff): those samples don't count, nor do the banks either
--- side (see dropSpans), out to the first sample whose gap is within the
--- part's limit (maxHover plus its kind's lift) or doesn't fall.
--- Given `ctx` (as the gap check does), it measures to what shows (see
--- shownUnder): `water` is set when that's a water surface, `through` to an
--- invisible part looked through, and a sample with nothing below it is a
--- span. Without, it measures to the snap's ground.
+-- An edge's samples (indexes into `found`) in rows, one per distance in
+-- from the edge, each row in order along it.
+local function edgeRows(list, found)
+	table.sort(list, function(a, b)
+		return found[a].across < found[b].across
+	end)
+	local rows = {}
+	for _, i in list do
+		local row = rows[#rows]
+		if not row or found[i].across - found[row[1]].across > SAME_ROW then
+			row = {}
+			table.insert(rows, row)
+		end
+		table.insert(row, i)
+	end
+	for _, row in rows do
+		table.sort(row, function(a, b)
+			return found[a].along < found[b].along
+		end)
+	end
+	return rows
+end
+
+-- The biggest gap between `s`'s resting face and the ground under it, at
+-- the samples of measure `m` within max(2, sampleSpacing) studs of the
+-- face's edges, leaving out spans and their banks (see dropSpans). Returns
+-- { gap, position, edge, water, through } or nil; a sunk part's gaps are
+-- negative. Given `ctx` it measures to what shows (see shownUnder), and a
+-- sample with nothing below it is a span; without, to the snap's ground.
 function Ground.edgeGap(s, m, config, ctx)
 	local band = math.max(2, config.sampleSpacing) + 1e-3
 	local ignore = ctx and Ground.ignoreFor(s, ctx)
@@ -382,26 +405,9 @@ function Ground.edgeGap(s, m, config, ctx)
 			table.insert(edges[edge], i)
 		end
 	end
-	-- Each edge's samples in rows (one per distance in from the edge), each
-	-- row in order along it.
 	local dropped = {}
 	for _, list in edges do
-		table.sort(list, function(a, b)
-			return found[a].across < found[b].across
-		end)
-		local rows = {}
-		for _, i in list do
-			local row = rows[#rows]
-			if not row or found[i].across - found[row[1]].across > SAME_ROW then
-				row = {}
-				table.insert(rows, row)
-			end
-			table.insert(row, i)
-		end
-		for _, row in rows do
-			table.sort(row, function(a, b)
-				return found[a].along < found[b].along
-			end)
+		for _, row in edgeRows(list, found) do
 			dropSpans(row, found, limit, config.connectMaxStep, dropped)
 		end
 	end
@@ -438,16 +444,16 @@ end
 function Ground.planSnap(solids, ctx, plan)
 	local skipped = {}
 	for _, s in solids do
-		local m = if Ground.isLocked(s, ctx) then { skip = "locked (Locked or BuildGuardLocked), so it stays where it is" } else Ground.measure(s, ctx)
-		if m.delta then
-			if math.abs(m.delta) > 1e-4 then
-				local reason = ("snap to ground (%+.3f)"):format(m.delta)
-				for _, item in Ground.items(s, ctx, m.delta, "snap", reason) do
-					Plan.add(plan, item)
-				end
-			end
-		else
+		local m = if Ground.isLocked(s, ctx)
+			then { skip = "locked (Locked or BuildGuardLocked), so it stays where it is" }
+			else Ground.measure(s, ctx)
+		if not m.delta then
 			table.insert(skipped, { part = s.part, reason = m.skip })
+		elseif math.abs(m.delta) > 1e-4 then
+			local reason = ("snap to ground (%+.3f)"):format(m.delta)
+			for _, item in Ground.items(s, ctx, m.delta, "snap", reason) do
+				Plan.add(plan, item)
+			end
 		end
 	end
 	return skipped
@@ -455,29 +461,26 @@ end
 
 -- Off-ground issue for one road/rail/track measured as `m`, or nil.
 local function offGroundIssue(s, kind, ctx, m)
-	local bottom = s.cf:PointToWorldSpace(Vector3.new(0, -upSign(s) * s.half.Y, 0))
+	local issue = {
+		check = "offground",
+		severity = "warning",
+		parts = { s.part },
+		position = s.cf:PointToWorldSpace(Vector3.new(0, -upSign(s) * s.half.Y, 0)),
+	}
 	if m.delta and math.abs(m.delta) > ctx.configFor(s.part).groundTolerance then
 		local what = if m.delta < 0
 			then ("hovers %.2f studs above the ground"):format(-m.delta)
 			else ("is sunk %.2f studs into the ground"):format(m.delta)
 		local locked = Ground.isLocked(s, ctx)
-		return {
-			check = "offground",
-			severity = "warning",
-			parts = { s.part },
-			position = bottom,
-			value = m.delta,
-			message = ("%s %s %s%s"):format(kind, ctx.path(s.part), what, if locked then " — " .. Ground.LOCKED_NOTE else ""),
-			fixItems = if locked then nil else Ground.items(s, ctx, m.delta, "offground", ("snap to ground (%+.3f)"):format(m.delta)),
-		}
+		issue.value = m.delta
+		issue.message = ("%s %s %s%s"):format(kind, ctx.path(s.part), what, if locked then " — " .. Ground.LOCKED_NOTE else "")
+		if not locked then
+			issue.fixItems = Ground.items(s, ctx, m.delta, "offground", ("snap to ground (%+.3f)"):format(m.delta))
+		end
+		return issue
 	elseif m.skip == "no ground below" then
-		return {
-			check = "offground",
-			severity = "warning",
-			parts = { s.part },
-			position = bottom,
-			message = ("%s %s has no ground below it — put ground under it or move it"):format(kind, ctx.path(s.part)),
-		}
+		issue.message = ("%s %s has no ground below it — put ground under it or move it"):format(kind, ctx.path(s.part))
+		return issue
 	end
 	return nil
 end
@@ -521,7 +524,7 @@ local function gapIssue(s, kind, ctx, m)
 			Util.vector(worst.position),
 			config.maxHover,
 			if lift > 0 then (" + %s %.2f"):format(key, lift) else "",
-			if sources.maxHover then ", set on " .. ctx.path(sources.maxHover) else "",
+			Ground.setOn(ctx, sources, "maxHover"),
 			if worst.through then " that shows through invisible " .. ctx.path(worst.through) else "",
 			fix
 		),

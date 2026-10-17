@@ -53,6 +53,22 @@ local EPSILON = 1e-6
 -- ReadVoxels' size limit.
 local VOXEL_CHUNK = 64
 
+-- `v` on the 4-stud voxel grid, rounded with `round` (math.floor or math.ceil).
+local function toGrid(v, round)
+	return Vector3.new(round(v.X / 4) * 4, round(v.Y / 4) * 4, round(v.Z / 4) * 4)
+end
+
+-- Query params that skip Terrain (and stop after `maxParts`, if given).
+local function excludeTerrain(terrain, maxParts)
+	local params = OverlapParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = { terrain }
+	if maxParts then
+		params.MaxParts = maxParts
+	end
+	return params
+end
+
 --------------------------------------------------------------------------------
 -- Yielding: long scans hand Studio a frame every time slice
 --------------------------------------------------------------------------------
@@ -347,14 +363,6 @@ local function fitToPart(data, part)
 	return triangles, nil, note
 end
 
-local function meshTriangles(part)
-	local data, reason = loadMesh(part)
-	if not data then
-		return nil, reason
-	end
-	return fitToPart(data, part)
-end
-
 -- Triangles given by hand (setMeshTriangles), for the whole session: the
 -- test scene is built with one world and scanned with another.
 local given = setmetatable({}, { __mode = "k" })
@@ -417,9 +425,7 @@ function StudioWorld.new(worldRoot)
 	-- Candidates come from a bounds query with default OverlapParams, which
 	-- skips parts the engine leaves out of queries (CanQuery off on a part
 	-- that doesn't collide).
-	local overlap = OverlapParams.new()
-	overlap.FilterType = Enum.RaycastFilterType.Exclude
-	overlap.FilterDescendantsInstances = { terrain }
+	local overlap = excludeTerrain(terrain)
 
 	function self.partAt(point, ignore)
 		for _, part in worldRoot:GetPartBoundsInRadius(point, 0.01, overlap) do
@@ -439,7 +445,7 @@ function StudioWorld.new(worldRoot)
 	-- surface voxels (partly full) never cause false alarms; shallow burial is
 	-- caught by the ray test instead.
 	local function occupancyAt(point)
-		local min = Vector3.new(math.floor(point.X / 4) * 4, math.floor(point.Y / 4) * 4, math.floor(point.Z / 4) * 4)
+		local min = toGrid(point, math.floor)
 		local region = Region3.new(min, min + Vector3.new(4, 4, 4))
 		local materials, occupancies = terrain:ReadVoxels(region, 4)
 		local material = materials[1][1][1]
@@ -477,11 +483,14 @@ function StudioWorld.new(worldRoot)
 		given[part] = triangles
 	end
 	function self.meshTriangles(part)
-		local triangles = given[part]
-		if triangles then
-			return triangles
+		if given[part] then
+			return given[part]
 		end
-		return meshTriangles(part)
+		local data, reason = loadMesh(part)
+		if not data then
+			return nil, reason
+		end
+		return fitToPart(data, part)
 	end
 
 	-- Answers are kept for this world (one scan), since a scan asks about
@@ -517,17 +526,18 @@ function StudioWorld.new(worldRoot)
 		params.FilterType = Enum.RaycastFilterType.Include
 		params.FilterDescendantsInstances = { terrain }
 		params.IgnoreWater = true
-		local waited = 0
-		while true do
-			local seen = true
+		local function allHit()
 			for _, probe in probes do
 				-- Terrain is always in workspace, whatever worldRoot is.
 				if not workspace:Raycast(probe.origin, probe.direction, params) then
-					seen = false
-					break
+					return false
 				end
 			end
-			if seen then
+			return true
+		end
+		local waited = 0
+		while true do
+			if allHit() then
 				return true
 			end
 			if not coroutine.isyieldable() then
@@ -544,10 +554,7 @@ function StudioWorld.new(worldRoot)
 		end
 	end
 
-	local anyPart = OverlapParams.new()
-	anyPart.FilterType = Enum.RaycastFilterType.Exclude
-	anyPart.FilterDescendantsInstances = { terrain }
-	anyPart.MaxParts = 1
+	local anyPart = excludeTerrain(terrain, 1)
 
 	-- The first voxel between grid-aligned corners `min` and `max` that isn't
 	-- Air (water counts): material, voxel centre | nil.
@@ -583,9 +590,6 @@ function StudioWorld.new(worldRoot)
 		end
 		-- Every voxel the box touches.
 		local box = Geometry.solidFrom(cframe, size, "Block")
-		local function toGrid(v, round)
-			return Vector3.new(round(v.X / 4) * 4, round(v.Y / 4) * 4, round(v.Z / 4) * 4)
-		end
 		local material, at = firstTerrain(toGrid(box.min, math.floor), toGrid(box.max, math.ceil))
 		if material then
 			return false, ("terrain (%s) at %s"):format(material.Name, Util.vector(at, 0))

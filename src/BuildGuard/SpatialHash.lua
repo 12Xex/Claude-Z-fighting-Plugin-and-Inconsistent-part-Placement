@@ -23,19 +23,30 @@ function SpatialHash.new(cellSize)
 	return setmetatable({ cellSize = cellSize or 8, cells = {}, big = {} }, SpatialHash)
 end
 
-function SpatialHash:_range(min, max)
-	local c = self.cellSize
-	return math.floor(min.X / c),
-		math.floor(min.Y / c),
-		math.floor(min.Z / c),
-		math.floor(max.X / c),
-		math.floor(max.Y / c),
-		math.floor(max.Z / c)
+-- The cells x0, y0, z0, x1, y1, z1 a box covers; nil past MAX_CELLS_PER_ITEM.
+local function cellRange(cellSize, min, max)
+	local c = cellSize
+	local x0, y0, z0 = math.floor(min.X / c), math.floor(min.Y / c), math.floor(min.Z / c)
+	local x1, y1, z1 = math.floor(max.X / c), math.floor(max.Y / c), math.floor(max.Z / c)
+	if (x1 - x0 + 1) * (y1 - y0 + 1) * (z1 - z0 + 1) > MAX_CELLS_PER_ITEM then
+		return nil
+	end
+	return x0, y0, z0, x1, y1, z1
+end
+
+-- Appends the items of `list` not yet in `seen` to `out`.
+local function addUnseen(out, seen, list)
+	for _, item in list do
+		if not seen[item] then
+			seen[item] = true
+			table.insert(out, item)
+		end
+	end
 end
 
 function SpatialHash:insert(item, min, max)
-	local x0, y0, z0, x1, y1, z1 = self:_range(min, max)
-	if (x1 - x0 + 1) * (y1 - y0 + 1) * (z1 - z0 + 1) > MAX_CELLS_PER_ITEM then
+	local x0, y0, z0, x1, y1, z1 = cellRange(self.cellSize, min, max)
+	if not x0 then
 		table.insert(self.big, item)
 		return
 	end
@@ -57,20 +68,12 @@ end
 -- Unique items whose cells touch the box (a superset of true overlaps).
 function SpatialHash:query(min, max)
 	local seen, out = {}, {}
-	for _, item in self.big do
-		seen[item] = true
-		table.insert(out, item)
-	end
-	local x0, y0, z0, x1, y1, z1 = self:_range(min, max)
-	if (x1 - x0 + 1) * (y1 - y0 + 1) * (z1 - z0 + 1) > MAX_CELLS_PER_ITEM then
+	addUnseen(out, seen, self.big)
+	local x0, y0, z0, x1, y1, z1 = cellRange(self.cellSize, min, max)
+	if not x0 then
 		-- Huge query: scan every cell instead of every coordinate.
 		for _, list in self.cells do
-			for _, item in list do
-				if not seen[item] then
-					seen[item] = true
-					table.insert(out, item)
-				end
-			end
+			addUnseen(out, seen, list)
 		end
 		return out
 	end
@@ -79,12 +82,7 @@ function SpatialHash:query(min, max)
 			for z = z0, z1 do
 				local list = self.cells[key(x, y, z)]
 				if list then
-					for _, item in list do
-						if not seen[item] then
-							seen[item] = true
-							table.insert(out, item)
-						end
-					end
+					addUnseen(out, seen, list)
 				end
 			end
 		end

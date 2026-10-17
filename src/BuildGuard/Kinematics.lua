@@ -86,10 +86,8 @@ function Kinematics.graph(roots)
 			end
 		elseif d:IsA("JointInstance") then
 			local a, b = Util.prop(d, "Part0"), Util.prop(d, "Part1")
-			if a and b and enabled(d) and not NON_RIGID_JOINTS[d.ClassName] then
-				table.insert(g.rigid, { a, b, d })
-			elseif a and b and enabled(d) then
-				table.insert(g.links, { a, b, d })
+			if a and b and enabled(d) then
+				table.insert(if NON_RIGID_JOINTS[d.ClassName] then g.links else g.rigid, { a, b, d })
 			end
 		elseif d:IsA("WeldConstraint") then
 			local a, b = Util.prop(d, "Part0"), Util.prop(d, "Part1")
@@ -108,7 +106,8 @@ function Kinematics.graph(roots)
 			if a and b and enabled(d) then
 				table.insert(if d:IsA("RigidConstraint") then g.rigid else g.links, { a, b, d })
 				if d:IsA("HingeConstraint") or d:IsA("BallSocketConstraint") then
-					g.noCollide[Kinematics.pairKey(a, b)] = g.noCollide[Kinematics.pairKey(a, b)] or d
+					local key = Kinematics.pairKey(a, b)
+					g.noCollide[key] = g.noCollide[key] or d
 				end
 			end
 		end
@@ -147,11 +146,10 @@ local function unionFind(pairs)
 	return find
 end
 
--- Assemblies: rigidly joined groups. Returns {
---   of = { [part] = assemblyId },  members = { [assemblyId] = { part } } }
--- assemblyId is one member part.
-function Kinematics.assemblies(g)
-	local find = unionFind(g.rigid)
+-- `g`'s parts grouped by `pairs`: { of = { [part] = groupId },
+-- members = { [groupId] = { part } } }, groupId being one member part.
+local function groupBy(g, pairs)
+	local find = unionFind(pairs)
 	local of, members = {}, {}
 	for _, p in g.parts do
 		local r = find(p)
@@ -162,22 +160,18 @@ function Kinematics.assemblies(g)
 	return { of = of, members = members }
 end
 
--- Mechanisms: groups connected by any joint or constraint. Same shape as
--- Kinematics.assemblies.
+-- Assemblies: rigidly joined groups.
+function Kinematics.assemblies(g)
+	return groupBy(g, g.rigid)
+end
+
+-- Mechanisms: groups connected by any joint or constraint.
 function Kinematics.mechanisms(g)
 	local all = table.clone(g.rigid)
 	for _, l in g.links do
 		table.insert(all, l)
 	end
-	local find = unionFind(all)
-	local of, members = {}, {}
-	for _, p in g.parts do
-		local r = find(p)
-		of[p] = r
-		members[r] = members[r] or {}
-		table.insert(members[r], p)
-	end
-	return { of = of, members = members }
+	return groupBy(g, all)
 end
 
 -- Can `a` and `b` collide with each other physically? (Both CanCollide,
@@ -214,6 +208,21 @@ local function nearestModel(instance)
 	return nil
 end
 Kinematics.nearestModel = nearestModel
+
+-- The deepest instance holding both `a` and `b` (either may be it), or nil.
+local function commonAncestor(a, b)
+	local seen = {}
+	local node = a
+	while node do
+		seen[node] = true
+		node = node.Parent
+	end
+	node = b
+	while node and not seen[node] do
+		node = node.Parent
+	end
+	return node
+end
 
 -- Vehicles under `roots`. Returns a list of { model, parts = { [part] = true },
 -- list = { part } } and a lookup partSet -> vehicle.
@@ -274,17 +283,13 @@ function Kinematics.vehicles(roots, g)
 	end
 	-- Models marked BuildGuardVehicle.
 	local marked = {}
-	local function considerModel(m)
-		if m:IsA("Model") and not marked[m] and Util.marker(m, "BuildGuardVehicle") == true then
-			marked[m] = true
-			local v = vehicleFor(m)
-			v.models[m] = true
-		end
-	end
 	for _, p in g.parts do
 		local node = p.Parent
 		while node do
-			considerModel(node)
+			if node:IsA("Model") and not marked[node] and Util.marker(node, "BuildGuardVehicle") == true then
+				marked[node] = true
+				vehicleFor(node).models[node] = true
+			end
 			node = node.Parent
 		end
 	end
@@ -311,10 +316,7 @@ function Kinematics.vehicles(roots, g)
 		end
 		if target then
 			for _, p in v.list do
-				if not target.parts[p] then
-					target.parts[p] = true
-					table.insert(target.list, p)
-				end
+				add(target, p)
 				owner[p] = target
 			end
 		elseif #v.list > 0 then
@@ -327,18 +329,7 @@ function Kinematics.vehicles(roots, g)
 	for _, v in result do
 		local common = v.list[1]
 		for i = 2, #v.list do
-			local a, b = common, v.list[i]
-			local seen = {}
-			local node = a
-			while node do
-				seen[node] = true
-				node = node.Parent
-			end
-			node = b
-			while node and not seen[node] do
-				node = node.Parent
-			end
-			common = node
+			common = commonAncestor(common, v.list[i])
 			if not common then
 				break
 			end

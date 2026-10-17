@@ -49,10 +49,38 @@ local TestCases = {}
 local STEEL = Color3.fromRGB(120, 120, 130)
 local DARK = Color3.fromRGB(30, 30, 30)
 local ASPHALT = Color3.fromRGB(60, 60, 64)
+local GRASS = Color3.fromRGB(90, 140, 70)
 
--- Meshes, round parts, corner wedges, far view, repeated names.
-function TestCases.faces(b, origin)
-	local o = origin -- local offset of this zone in the scene
+-- The 12 triangles of a closed box from `min` to `max` (local space),
+-- wound counter-clockwise seen from outside.
+local function boxTriangles(min, max)
+	local function corner(x, y, z)
+		return Vector3.new(if x > 0 then max.X else min.X, if y > 0 then max.Y else min.Y, if z > 0 then max.Z else min.Z)
+	end
+	local centre = (min + max) / 2
+	local quads = {
+		{ corner(0, 0, 0), corner(1, 0, 0), corner(1, 1, 0), corner(0, 1, 0) },
+		{ corner(0, 0, 1), corner(1, 0, 1), corner(1, 1, 1), corner(0, 1, 1) },
+		{ corner(0, 0, 0), corner(0, 1, 0), corner(0, 1, 1), corner(0, 0, 1) },
+		{ corner(1, 0, 0), corner(1, 1, 0), corner(1, 1, 1), corner(1, 0, 1) },
+		{ corner(0, 0, 0), corner(1, 0, 0), corner(1, 0, 1), corner(0, 0, 1) },
+		{ corner(0, 1, 0), corner(1, 1, 0), corner(1, 1, 1), corner(0, 1, 1) },
+	}
+	local out = {}
+	for _, q in quads do
+		local a, b, c, d = q[1], q[2], q[3], q[4]
+		if (b - a):Cross(c - a):Dot((a + b + c + d) / 4 - centre) < 0 then
+			a, b, c, d = d, c, b, a
+		end
+		table.insert(out, { a, b, c })
+		table.insert(out, { a, c, d })
+	end
+	return out
+end
+
+-- Meshes, round parts, corner wedges, far view, repeated names. `o` is
+-- this zone's offset in the scene.
+function TestCases.faces(b, o)
 
 	-- P17: a mesh imported twice.
 	b.part("Tub", Vector3.new(6, 3, 8), o * CFrame.new(0, 1.5, 0), STEEL, nil, "MeshPart")
@@ -68,7 +96,7 @@ function TestCases.faces(b, origin)
 	b.part("PanelWall", Vector3.new(10, 8, 1), o * CFrame.new(24, 4, 0), Color3.fromRGB(150, 150, 140))
 	local panel = b.part("Panel_Mesh", Vector3.new(4, 3, 0.2), o * CFrame.new(24, 4, -0.5), Color3.fromRGB(40, 90, 200), nil, "MeshPart")
 	-- Local space: the outer face at z = 0 (the wall's front), the back at z = +0.1 inside the wall.
-	b.world.setMeshTriangles(panel, TestCases.boxTriangles(Vector3.new(-2, -1.5, 0), Vector3.new(2, 1.5, 0.1)))
+	b.world.setMeshTriangles(panel, boxTriangles(Vector3.new(-2, -1.5, 0), Vector3.new(2, 1.5, 0.1)))
 	b.plant(panel, "P19", "zfight", "fix", "mesh triangles flush with a wall")
 
 	-- P20: a rod in a sleeve, same radius on the same axis.
@@ -120,7 +148,6 @@ function TestCases.faces(b, origin)
 	-- second is turned over about their shared edge (the square's diagonal),
 	-- so its Left face is on top, then pushed `overlap` across that edge.
 	local land = b.model("LandFacets")
-	local GRASS = Color3.fromRGB(90, 140, 70)
 	local function facets(x, overlap)
 		local frame = o * CFrame.new(x, 2, 0) * CFrame.Angles(0, 0, math.pi / 2)
 		local s = overlap / math.sqrt(2)
@@ -130,10 +157,10 @@ function TestCases.faces(b, origin)
 		first.Parent, second.Parent = land, land
 		return first, second
 	end
-	-- 2/3 of the seam width (0.02 by default), but at least 1.5x the
-	-- float-rounding sliver a scan ignores where the facets are (as in
-	-- Geometry.coplanarOverlap: about 0.012 at the self-test's spot). With
-	-- seams off, or too narrow for that plus its rounding, it's skipped.
+	-- 2/3 of the seam width, but at least 1.5x the float sliver a scan
+	-- ignores where the facets are (as in Geometry.coplanarOverlap: about
+	-- 0.012 at the self-test's spot). Skipped when seams are off or too
+	-- narrow for that plus its rounding.
 	local width = b.config.zFightSeamWidth
 	local at = (b.base * o * CFrame.new(104, 2, 0)).Position
 	local sliver = math.max(1e-3, 4 * 2 ^ -23 * math.max(math.abs(at.X), math.abs(at.Y), math.abs(at.Z)))
@@ -152,14 +179,12 @@ function TestCases.faces(b, origin)
 	local rib = b.part("Washboard_Rib", Vector3.new(8, 0.22, 0.6), CFrame.new(), Color3.fromRGB(120, 105, 90))
 	b.control(Layers.place(rib, deck, { layer = 0, rotation = 90, config = b.config }))
 
-	-- Control: a road resting on a flat ground pad with the docs' footing
-	-- under it (as wide and long as the road, its top at the road's bottom)
-	-- reaching through the pad into the ground. Where it passes through,
-	-- the footing's top is flush with the pad's, but the road's bottom
-	-- covers all of that: hidden, not a z-fight. Beside the Tub, the pad 2
-	-- studs wider than the road on every side. A positive roadLift holds a
-	-- road that far off a support, so it can't rest on a footing: the
-	-- footing is left out then (and the road rests its lift above the pad).
+	-- Control: a road resting on a ground pad (2 studs wider on every side)
+	-- beside the Tub, with the docs' footing under it, as wide and long as
+	-- the road and reaching through the pad into the ground. The footing's
+	-- top is flush with the pad's there, but the road's bottom hides all of
+	-- it: not a z-fight. A positive roadLift holds a road off a support, so
+	-- then the footing is left out (and the road rests its lift above the pad).
 	local length = b.W + 4 -- a piece on its own is measured across its shorter side
 	local thick = math.clamp(b.config.maxLedge - b.config.roadLift - 0.1, 0.2, 1) -- as the scene's roads
 	local padTop = 1
@@ -170,8 +195,8 @@ function TestCases.faces(b, origin)
 	b.control(b.part("Road_OnPad", Vector3.new(b.W, thick, length), padAt * CFrame.new(0, bottom + thick / 2, 0), ASPHALT, Enum.Material.Asphalt))
 	if Ground.effectiveLift(b.config.roadLift, thick, false) == 0 then
 		local depth = bottom + 1
-		local DIRT = Color3.fromRGB(110, 90, 70)
-		b.control(b.part("Footing_Road_OnPad", Vector3.new(b.W, depth, length), padAt * CFrame.new(0, bottom - depth / 2, 0), DIRT, Enum.Material.Ground))
+		local dirt = Color3.fromRGB(110, 90, 70)
+		b.control(b.part("Footing_Road_OnPad", Vector3.new(b.W, depth, length), padAt * CFrame.new(0, bottom - depth / 2, 0), dirt, Enum.Material.Ground))
 	end
 	return { far = far, tubs = tubs, land = land }
 end
@@ -230,7 +255,9 @@ function TestCases.names(b, road)
 	local function pad(x, parent)
 		local p = b.part("Turnaround", Vector3.new(10, 0.4, 10), CFrame.new(), ASPHALT, Enum.Material.Asphalt)
 		onGround(p, x, half.Z + 10, 0.2)
-		p.Parent = parent or p.Parent
+		if parent then
+			p.Parent = parent
+		end
 		return p
 	end
 	b.plant(pad(-30), "P33", "unclassified", "flag", "asphalt pad with no road name")
@@ -263,34 +290,6 @@ function TestCases.names(b, road)
 	onGround(roof, -88, half.Z + 10, 6)
 	roof.CFrame *= CFrame.Angles(math.rad(35), 0, 0)
 	b.control(roof)
-end
-
--- The 12 triangles of a closed box from `min` to `max` (local space),
--- wound counter-clockwise seen from outside.
-function TestCases.boxTriangles(min, max)
-	local function corner(x, y, z)
-		return Vector3.new(if x > 0 then max.X else min.X, if y > 0 then max.Y else min.Y, if z > 0 then max.Z else min.Z)
-	end
-	local centre = (min + max) / 2
-	local quads = {
-		{ corner(0, 0, 0), corner(1, 0, 0), corner(1, 1, 0), corner(0, 1, 0) },
-		{ corner(0, 0, 1), corner(1, 0, 1), corner(1, 1, 1), corner(0, 1, 1) },
-		{ corner(0, 0, 0), corner(0, 1, 0), corner(0, 1, 1), corner(0, 0, 1) },
-		{ corner(1, 0, 0), corner(1, 1, 0), corner(1, 1, 1), corner(1, 0, 1) },
-		{ corner(0, 0, 0), corner(1, 0, 0), corner(1, 0, 1), corner(0, 0, 1) },
-		{ corner(0, 1, 0), corner(1, 1, 0), corner(1, 1, 1), corner(0, 1, 1) },
-	}
-	local out = {}
-	for _, q in quads do
-		local a, b2, c, d = q[1], q[2], q[3], q[4]
-		local faceCentre = (a + b2 + c + d) / 4
-		if (b2 - a):Cross(c - a):Dot(faceCentre - centre) < 0 then
-			a, b2, c, d = d, c, b2, a
-		end
-		table.insert(out, { a, b2, c })
-		table.insert(out, { a, c, d })
-	end
-	return out
 end
 
 return TestCases

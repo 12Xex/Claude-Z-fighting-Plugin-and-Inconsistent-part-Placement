@@ -16,6 +16,15 @@ local function charClass(ch)
 	return nil
 end
 
+-- Does a new word start at a `class` character after a `previous` one?
+local function isBoundary(previous, class, nextChar)
+	if (class == "digit") ~= (previous == "digit") or (class == "upper" and previous == "lower") then
+		return true
+	end
+	-- "HTTPServer": the last capital of a run starts the next word.
+	return class == "upper" and previous == "upper" and charClass(nextChar) == "lower"
+end
+
 -- The lowercase words in a name. Splits on anything that isn't a letter or
 -- digit, between a lowercase and an uppercase letter, and between letters
 -- and digits:
@@ -24,8 +33,7 @@ end
 --     "Wheel_FL"    -> { "wheel", "fl" }
 function Util.words(name)
 	local out = {}
-	local current = ""
-	local previous = nil
+	local current, previous = "", nil
 	local function flush()
 		if #current > 0 then
 			table.insert(out, string.lower(current))
@@ -39,16 +47,7 @@ function Util.words(name)
 			flush()
 			previous = nil
 		else
-			local boundary = false
-			if previous then
-				if (class == "digit") ~= (previous == "digit") or (class == "upper" and previous == "lower") then
-					boundary = true
-				elseif class == "upper" and previous == "upper" then
-					-- "HTTPServer": the last capital of a run starts the next word.
-					boundary = charClass(string.sub(name, i + 1, i + 1)) == "lower"
-				end
-			end
-			if boundary then
+			if previous and isBoundary(previous, class, string.sub(name, i + 1, i + 1)) then
 				flush()
 			end
 			current ..= ch
@@ -170,6 +169,20 @@ function Util.path(instance, roots, cache)
 	return table.concat(segments, "/")
 end
 
+-- The `n`th child of `parent` named `name`, or nil.
+local function nthChild(parent, name, n)
+	local count = 0
+	for _, child in parent:GetChildren() do
+		if child.Name == name then
+			count += 1
+			if count == n then
+				return child
+			end
+		end
+	end
+	return nil
+end
+
 -- The instance a Util.path names, searching from `root` (whose own name is
 -- the path's first segment). nil if it isn't there.
 function Util.find(root, path)
@@ -192,20 +205,10 @@ function Util.find(root, path)
 			end
 			node = root
 		else
-			local count, found = 0, nil
-			for _, child in node:GetChildren() do
-				if child.Name == name then
-					count += 1
-					if count == wanted then
-						found = child
-						break
-					end
-				end
-			end
-			if not found then
+			node = nthChild(node, name, wanted)
+			if not node then
 				return nil
 			end
-			node = found
 		end
 	end
 	return node

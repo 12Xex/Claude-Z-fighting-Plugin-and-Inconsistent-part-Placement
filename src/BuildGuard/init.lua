@@ -186,24 +186,21 @@ BuildGuard.newContext = newContext
 -- parts resting on the ground), and parts either flags are skipped by the
 -- edge check (one issue per part is enough). A gap doesn't skip the edge
 -- check: nothing moves the part, and the drop beside it is still a step.
+local function flagFirstParts(issues, check, flagged)
+	for _, issue in issues do
+		if issue.check == check then
+			flagged[issue.parts[1]] = true
+		end
+	end
+	return issues
+end
+
 local CHECKS = {
 	{ name = "buried", run = function(ctx, state)
-		local issues = Buried.scan(ctx)
-		for _, issue in issues do
-			if issue.check == "buried" then
-				state.flagged[issue.parts[1]] = true
-			end
-		end
-		return issues
+		return flagFirstParts(Buried.scan(ctx), "buried", state.flagged)
 	end },
 	{ name = "offground", run = function(ctx, state)
-		local issues = Ground.scan(ctx, state.flagged)
-		for _, issue in issues do
-			if issue.check == "offground" then
-				state.flagged[issue.parts[1]] = true
-			end
-		end
-		return issues
+		return flagFirstParts(Ground.scan(ctx, state.flagged), "offground", state.flagged)
 	end },
 	{ name = "zfight", run = function(ctx)
 		return ZFight.scan(ctx)
@@ -244,6 +241,36 @@ function BuildGuard.scan(root, options)
 	return BuildGuard.scanNow(root, options)
 end
 
+-- Invalid BuildGuard_ attributes found while resolving (they're ignored,
+-- and the part falls back to its parent's settings), one issue each.
+local function addConfigIssues(ctx, issues)
+	local seen = {}
+	for _, e in ctx.resolver.errors do
+		local key = e.instance:GetFullName() .. "." .. e.attribute
+		if not seen[key] then
+			seen[key] = true
+			table.insert(issues, {
+				check = "config",
+				severity = "error",
+				parts = if e.instance:IsA("BasePart") then { e.instance } else {},
+				instance = e.instance,
+				message = ("%s attribute %s ignored: %s"):format(ctx.path(e.instance), e.attribute, e.message),
+			})
+		end
+	end
+end
+
+-- Errors first, then by check, then by message.
+local function issueOrder(a, b)
+	if a.severity ~= b.severity then
+		return SEVERITY_ORDER[a.severity] < SEVERITY_ORDER[b.severity]
+	end
+	if a.check ~= b.check then
+		return (CHECK_ORDER[a.check] or 99) < (CHECK_ORDER[b.check] or 99)
+	end
+	return a.message < b.message
+end
+
 function BuildGuard.scanNow(root, options)
 	options = options or {}
 	local started = Util.clock()
@@ -267,32 +294,8 @@ function BuildGuard.scanNow(root, options)
 	local unclassified = Classify.unclassified(ctx)
 	table.insert(timings, { name = "unclassified", seconds = Util.clock() - t })
 	ctx.progress("done", 0, 0)
-	-- Invalid BuildGuard_ attributes found while resolving (they're ignored,
-	-- and the part falls back to its parent's settings).
-	local badConfig = {}
-	for _, e in ctx.resolver.errors do
-		local key = e.instance:GetFullName() .. "." .. e.attribute
-		if not badConfig[key] then
-			badConfig[key] = true
-			table.insert(issues, {
-				check = "config",
-				severity = "error",
-				parts = if e.instance:IsA("BasePart") then { e.instance } else {},
-				instance = e.instance,
-				message = ("%s attribute %s ignored: %s"):format(ctx.path(e.instance), e.attribute, e.message),
-			})
-		end
-	end
-
-	table.sort(issues, function(a, b)
-		if a.severity ~= b.severity then
-			return SEVERITY_ORDER[a.severity] < SEVERITY_ORDER[b.severity]
-		end
-		if a.check ~= b.check then
-			return (CHECK_ORDER[a.check] or 99) < (CHECK_ORDER[b.check] or 99)
-		end
-		return a.message < b.message
-	end)
+	addConfigIssues(ctx, issues)
+	table.sort(issues, issueOrder)
 
 	local counts = { error = 0, warning = 0 }
 	for _, issue in issues do
@@ -779,32 +782,36 @@ local function newJobId()
 	return ("check-%d"):format(jobCount)
 end
 
+-- Drops the oldest job records so the new one keeps the folder at MAX_JOBS,
+-- then adds the new job's record.
+local function newJobRecord(folder, id)
+	local existing = {}
+	for _, child in folder:GetChildren() do
+		if child:IsA("StringValue") then
+			table.insert(existing, child)
+		end
+	end
+	table.sort(existing, function(a, b)
+		return (a:GetAttribute("Started") or 0) < (b:GetAttribute("Started") or 0)
+	end)
+	for i = 1, #existing - MAX_JOBS + 1 do
+		existing[i]:Destroy()
+	end
+	local record = Instance.new("StringValue")
+	record.Name = id
+	record.Archivable = false
+	record:SetAttribute("State", "running")
+	record:SetAttribute("Stage", "starting")
+	record:SetAttribute("Started", Util.clock())
+	record.Parent = folder
+	return record
+end
+
 function BuildGuard.startCheck(root, options)
 	options = table.clone(options or {})
 	local id = newJobId()
 	local folder = jobFolder(options)
-	local record
-	if folder then
-		local existing = {}
-		for _, child in folder:GetChildren() do
-			if child:IsA("StringValue") then
-				table.insert(existing, child)
-			end
-		end
-		table.sort(existing, function(a, b)
-			return (a:GetAttribute("Started") or 0) < (b:GetAttribute("Started") or 0)
-		end)
-		for i = 1, #existing - MAX_JOBS + 1 do
-			existing[i]:Destroy()
-		end
-		record = Instance.new("StringValue")
-		record.Name = id
-		record.Archivable = false
-		record:SetAttribute("State", "running")
-		record:SetAttribute("Stage", "starting")
-		record:SetAttribute("Started", Util.clock())
-		record.Parent = folder
-	end
+	local record = if folder then newJobRecord(folder, id) else nil
 	local job = {
 		id = id,
 		state = "running",
@@ -909,21 +916,23 @@ function BuildGuard.jobStatus(id, options)
 	if record and record:GetAttribute("State") ~= "running" then
 		return finished(record.Value, record:GetAttribute("State"))
 	end
-	if job or record then
-		local function field(key, attribute)
-			if job then
-				return job[key]
-			end
-			return record:GetAttribute(attribute) or 0
+	local text
+	if job then
+		text = progressText(job.stage, job.done, job.total, job.check, job.checks, Util.clock() - job.started)
+	elseif record then
+		local function attribute(name)
+			return record:GetAttribute(name) or 0
 		end
-		local text = progressText(
-			if job then job.stage else record:GetAttribute("Stage"),
-			field("done", "Done"),
-			field("total", "Total"),
-			field("check", "Check"),
-			field("checks", "Checks"),
-			if job then Util.clock() - job.started else record:GetAttribute("Seconds") or 0
+		text = progressText(
+			record:GetAttribute("Stage"),
+			attribute("Done"),
+			attribute("Total"),
+			attribute("Check"),
+			attribute("Checks"),
+			attribute("Seconds")
 		)
+	end
+	if text then
 		return ("BuildGuard check %s running: %s"):format(id, text), "running"
 	end
 	return ("No BuildGuard check %s (only the last %d are kept)"):format(tostring(id), MAX_JOBS), "unknown"

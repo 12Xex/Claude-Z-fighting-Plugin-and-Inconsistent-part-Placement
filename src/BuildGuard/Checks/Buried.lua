@@ -36,18 +36,14 @@ local Ground = require(script.Parent.Ground)
 
 local Buried = {}
 
+-- Cover probes also look through other roads, rails and tracks.
 local function coverIgnore(part, ctx)
 	return function(instance)
-		if instance == part or instance:IsDescendantOf(part) then
-			return true
+		local rule = Ground.looksThrough(part, ctx, instance)
+		if rule ~= nil then
+			return rule
 		end
-		if not instance:IsA("BasePart") or ctx.world.isTerrain(instance) then
-			return false
-		end
-		return Classify.isLayered(instance)
-			or ctx.kindOf(instance) ~= nil
-			or ctx.isIgnored(instance)
-			or ctx.vehicleOf(instance) ~= nil
+		return ctx.kindOf(instance) ~= nil
 	end
 end
 
@@ -62,14 +58,9 @@ local function headroomIgnore(part, ctx)
 	local probeY = 0
 	local restsAt = {}
 	local function ignore(instance)
-		if instance == part or instance:IsDescendantOf(part) then
-			return true
-		end
-		if not instance:IsA("BasePart") or ctx.world.isTerrain(instance) then
-			return false
-		end
-		if Classify.isLayered(instance) or ctx.isIgnored(instance) or ctx.vehicleOf(instance) ~= nil then
-			return true
+		local rule = Ground.looksThrough(part, ctx, instance)
+		if rule ~= nil then
+			return rule
 		end
 		local kind = ctx.kindOf(instance)
 		if not kind then
@@ -164,12 +155,9 @@ function Buried.scan(ctx)
 			local config = ctx.configFor(s.part)
 			local samples = Ground.surfaceSamples(s, config.sampleSpacing)
 			local covered, covers, position = findCovers(s, samples, config, coverIgnore(s.part, ctx), ctx)
-			local issue
-			if covered > 0 then
-				issue = buriedIssue(s, kind, samples, covered, covers, position, ctx)
-			else
-				issue = Buried.headroom(s, kind, samples, config, ctx)
-			end
+			local issue = if covered > 0
+				then buriedIssue(s, kind, samples, covered, covers, position, ctx)
+				else Buried.headroom(s, kind, samples, config, ctx)
 			if issue then
 				table.insert(issues, issue)
 			end
@@ -220,7 +208,7 @@ function Buried.headroom(s, kind, samples, config, ctx)
 			nameOf(ctx, ceiling),
 			Util.vector(at),
 			need,
-			if sources[key] then ", set on " .. ctx.path(sources[key]) else ""
+			Ground.setOn(ctx, sources, key)
 		),
 	}
 end

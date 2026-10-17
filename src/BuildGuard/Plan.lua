@@ -10,6 +10,8 @@
 	script that makes the part can be corrected and a rebuild keeps the fix.
 ]]
 
+local Util = require(script.Parent.Util)
+
 local Plan = {}
 
 function Plan.new()
@@ -84,28 +86,42 @@ function Plan.jointsOf(part)
 	local ok, joints = pcall(function()
 		return part:GetJoints()
 	end)
-	if ok and joints then
-		for _, j in joints do
-			consider(j)
+	if not (ok and joints) then
+		-- Outside Studio: joints live in the part's model (or next to it).
+		local scope = part.Parent
+		local node = part.Parent
+		while node do
+			if node:IsA("Model") then
+				scope = node
+				break
+			end
+			node = node.Parent
 		end
-		return out
+		joints = if scope then scope:GetDescendants() else {}
 	end
-	-- Outside Studio: joints live in the part's model (or next to it).
-	local scope = part.Parent
-	local node = part.Parent
-	while node do
-		if node:IsA("Model") then
-			scope = node
-			break
-		end
-		node = node.Parent
-	end
-	if scope then
-		for _, d in scope:GetDescendants() do
-			consider(d)
-		end
+	for _, j in joints do
+		consider(j)
 	end
 	return out
+end
+
+-- Makes `joint` hold its parts where they are now. Returns what revert needs
+-- to restore it, or nil when there was nothing to update.
+local function holdJoint(joint)
+	if joint:IsA("JointInstance") then
+		if joint.Part0 and joint.Part1 then
+			local saved = { joint = joint, c0 = joint.C0, c1 = joint.C1 }
+			-- A joint holds Part0.CFrame * C0 == Part1.CFrame * C1.
+			joint.C1 = joint.Part1.CFrame:Inverse() * joint.Part0.CFrame * joint.C0
+			return saved
+		end
+	elseif joint.Enabled then
+		-- A WeldConstraint records the offset when it's enabled.
+		joint.Enabled = false
+		joint.Enabled = true
+		return { joint = joint }
+	end
+	return nil
 end
 
 -- Applies the plan. Joints on moved parts are updated so they hold the parts
@@ -122,17 +138,9 @@ function Plan.apply(plan)
 		for _, joint in Plan.jointsOf(item.part) do
 			if not seen[joint] then
 				seen[joint] = true
-				if joint:IsA("JointInstance") then
-					if joint.Part0 and joint.Part1 then
-						table.insert(plan.joints, { joint = joint, c0 = joint.C0, c1 = joint.C1 })
-						-- A joint holds Part0.CFrame * C0 == Part1.CFrame * C1.
-						joint.C1 = joint.Part1.CFrame:Inverse() * joint.Part0.CFrame * joint.C0
-					end
-				elseif joint.Enabled then
-					-- A WeldConstraint records the offset when it's enabled.
-					table.insert(plan.joints, { joint = joint })
-					joint.Enabled = false
-					joint.Enabled = true
+				local saved = holdJoint(joint)
+				if saved then
+					table.insert(plan.joints, saved)
 				end
 			end
 		end
@@ -155,19 +163,15 @@ function Plan.revert(plan)
 	end
 end
 
-local function fmtVector(v)
-	return ("(%.3f, %.3f, %.3f)"):format(v.X, v.Y, v.Z)
-end
-
 function Plan.describeItem(item)
 	local parts = {}
 	local move = item.toCFrame.Position - item.fromCFrame.Position
 	if move.Magnitude > 1e-5 then
-		table.insert(parts, "move " .. fmtVector(move))
+		table.insert(parts, "move " .. Util.vector(move, 3))
 	end
 	local grow = item.toSize - item.fromSize
 	if grow.Magnitude > 1e-5 then
-		table.insert(parts, "resize " .. fmtVector(grow))
+		table.insert(parts, "resize " .. Util.vector(grow, 3))
 	end
 	if #parts == 0 then
 		table.insert(parts, "no change")
@@ -273,13 +277,11 @@ function Plan.formatChanges(changes)
 					fmt4(e.moveLocal)
 				)
 			)
-			local l = e.moveLocal
-			table.insert(lines, ("      builder: part.CFrame *= CFrame.new(%.4f, %.4f, %.4f)"):format(n4(l.X), n4(l.Y), n4(l.Z)))
+			table.insert(lines, "      builder: part.CFrame *= CFrame.new" .. fmt4(e.moveLocal))
 		end
 		if e.resize.Magnitude > 1e-6 then
-			local r = e.resize
-			table.insert(lines, ("      Size %s -> %s: grew %s"):format(fmt4(e.fromSize), fmt4(e.toSize), fmt4(r)))
-			table.insert(lines, ("      builder: part.Size += Vector3.new(%.4f, %.4f, %.4f)"):format(n4(r.X), n4(r.Y), n4(r.Z)))
+			table.insert(lines, ("      Size %s -> %s: grew %s"):format(fmt4(e.fromSize), fmt4(e.toSize), fmt4(e.resize)))
+			table.insert(lines, "      builder: part.Size += Vector3.new" .. fmt4(e.resize))
 		end
 		if e.rotated then
 			table.insert(lines, "      orientation changed too: copy its new CFrame")

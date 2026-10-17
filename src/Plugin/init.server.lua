@@ -29,7 +29,6 @@ local FACES = { "Top", "Front", "Back", "Right", "Left", "Bottom" }
 local VIEW_DISTANCE = 25
 -- How many of the slowest checks the status line names after a scan.
 local SLOWEST_SHOWN = 3
-local FAR_VIEW_ORIGIN = Vector3.new(-24576, 0, -24576)
 
 --------------------------------------------------------------------------------
 -- Widget
@@ -72,10 +71,16 @@ for _, side in { "PaddingTop", "PaddingBottom", "PaddingLeft", "PaddingRight" } 
 end
 padding.Parent = root
 
-local layout = Instance.new("UIListLayout")
-layout.Padding = UDim.new(0, 4)
-layout.SortOrder = Enum.SortOrder.LayoutOrder
-layout.Parent = root
+local function listLayout(parent, gap, direction)
+	local list = Instance.new("UIListLayout")
+	list.FillDirection = direction or Enum.FillDirection.Vertical
+	list.Padding = UDim.new(0, gap)
+	list.SortOrder = Enum.SortOrder.LayoutOrder
+	list.Parent = parent
+	return list
+end
+
+local layout = listLayout(root, 4)
 
 local order = 0
 local themed = {}
@@ -90,11 +95,7 @@ local function row()
 	frame.Size = UDim2.new(1, 0, 0, 26)
 	frame.BackgroundTransparency = 1
 	frame.LayoutOrder = nextOrder()
-	local list = Instance.new("UIListLayout")
-	list.FillDirection = Enum.FillDirection.Horizontal
-	list.Padding = UDim.new(0, 4)
-	list.SortOrder = Enum.SortOrder.LayoutOrder
-	list.Parent = frame
+	listLayout(frame, 4, Enum.FillDirection.Horizontal)
 	frame.Parent = root
 	return frame
 end
@@ -213,6 +214,12 @@ local function clearList()
 	end
 end
 
+-- Empties the result list and the markers in the viewport.
+local function clearResults()
+	clearMarkers()
+	clearList()
+end
+
 local function listRow(text, color, onClick)
 	local b = Instance.new("TextButton")
 	b.Size = UDim2.new(1, -8, 0, 0)
@@ -256,25 +263,28 @@ local function lookAt(position)
 	camera.Focus = CFrame.new(position)
 end
 
--- Selects an issue's parts (the ones still in the place) and, when the
--- issue says where the problem is, looks at that spot, so one of many
--- parts with the same name is easy to find.
-local function showIssue(issue)
-	local targets = {}
-	for _, instance in (if #issue.parts > 0 then issue.parts else { issue.instance }) do
+-- Selects the given instances that are still in the place.
+local function selectLive(instances)
+	local live = {}
+	for _, instance in instances do
 		if instance.Parent then
-			table.insert(targets, instance)
+			table.insert(live, instance)
 		end
 	end
-	Selection:Set(targets)
+	Selection:Set(live)
+end
+
+-- Selects an issue's parts and, when the issue says where the problem is,
+-- looks at that spot, so one of many parts with the same name is easy to find.
+local function showIssue(issue)
+	selectLive(if #issue.parts > 0 then issue.parts else { issue.instance })
 	if typeof(issue.position) == "Vector3" then
 		lookAt(issue.position)
 	end
 end
 
 local function showReport(report)
-	clearMarkers()
-	clearList()
+	clearResults()
 	for _, issue in report.issues do
 		local color = COLORS[issue.severity]
 		for _, part in issue.parts do
@@ -297,13 +307,7 @@ local function showReport(report)
 	local slabs = report.unclassified or {}
 	if #slabs > 0 then
 		listRow("[note] " .. BuildGuard.Classify.describeUnclassified(slabs, report.path), nil, function()
-			local live = {}
-			for _, part in slabs do
-				if part.Parent then
-					table.insert(live, part)
-				end
-			end
-			Selection:Set(live)
+			selectLive(slabs)
 		end)
 	end
 end
@@ -436,8 +440,7 @@ end
 
 local function preview(plan, heading)
 	state.pending = plan
-	clearMarkers()
-	clearList()
+	clearResults()
 	for _, item in plan.items do
 		outline(item.part, COLORS.warning)
 		ghost(item.toCFrame, item.toSize)
@@ -477,9 +480,6 @@ end
 -- report (each part and its exact move or resize) goes to Output for
 -- correcting that script. Returns true if it was printed.
 local function printFixReport(plan)
-	if not BuildGuard.formatChanges then
-		return false
-	end
 	local ok, text = pcall(BuildGuard.formatChanges, plan)
 	if not ok then
 		warn("BuildGuard: couldn't write the fix report: " .. tostring(text))
@@ -520,15 +520,11 @@ local function onRevert()
 		setStatus("Nothing applied yet in this session.")
 		return
 	end
-	local stale = 0
 	for _, item in state.applied.items do
 		if item.part.Parent == nil then
-			stale += 1
+			setStatus("Some fixed parts were deleted since; use Ctrl+Z instead.")
+			return
 		end
-	end
-	if stale > 0 then
-		setStatus("Some fixed parts were deleted since; use Ctrl+Z instead.")
-		return
 	end
 	BuildGuard.revert(state.applied, "BuildGuard: revert fixes")
 	state.applied = nil
@@ -610,20 +606,25 @@ local function onLayer()
 	)
 end
 
+local function studioWorld()
+	return require(script.Parent.BuildGuard.StudioWorld).new()
+end
+
 local function removeTestScene()
-	if state.testScene then
-		local scene = state.testScene
-		state.testScene = nil
-		-- Don't let Preview/Apply re-scan the scene once it's gone.
-		if state.roots and table.find(state.roots, scene.folder) then
-			state.roots = nil
-			state.report = nil
-			state.pending = nil
-		end
-		BuildGuard.withUndo("BuildGuard: remove test scene", function()
-			BuildGuard.TestScene.destroy(scene, require(script.Parent.BuildGuard.StudioWorld).new())
-		end)
+	local scene = state.testScene
+	if not scene then
+		return
 	end
+	state.testScene = nil
+	-- Don't let Preview/Apply re-scan the scene once it's gone.
+	if state.roots and table.find(state.roots, scene.folder) then
+		state.roots = nil
+		state.report = nil
+		state.pending = nil
+	end
+	BuildGuard.withUndo("BuildGuard: remove test scene", function()
+		BuildGuard.TestScene.destroy(scene, studioWorld())
+	end)
 end
 
 local function onBuildScene()
@@ -631,10 +632,9 @@ local function onBuildScene()
 	-- Drop any earlier scan/preview so the list matches the new selection.
 	state.pending = nil
 	state.report = nil
-	clearMarkers()
-	clearList()
+	clearResults()
 	local SelfTest = require(script.Parent.BuildGuard.SelfTest)
-	local world = require(script.Parent.BuildGuard.StudioWorld).new()
+	local world = studioWorld()
 	-- Built from the place-wide settings the scan will apply to it.
 	local config = (BuildGuard.getConfig(workspace))
 	local origin = SelfTest.DEFAULT_ORIGIN
@@ -676,8 +676,7 @@ local function onSelfTest()
 	removeTestScene()
 	setStatus("Running self-test…")
 	local ok, result = pcall(BuildGuard.selfTest)
-	clearMarkers()
-	clearList()
+	clearResults()
 	if not ok then
 		setStatus("Self-test errored: " .. tostring(result))
 		return
@@ -713,30 +712,21 @@ end
 -- Builds the far-view rig (replacing one built earlier this session) so the
 -- z-fight gap can be judged from far away on a real device.
 local function onFarView()
-	local build = BuildGuard.TestScene and BuildGuard.TestScene.buildFarView
-	if not build then
-		setStatus("This BuildGuard version has no far-view rig. Update the plugin.")
-		return
-	end
-	local origin = if BuildGuard.FarView and BuildGuard.FarView.DEFAULT_ORIGIN
-		then BuildGuard.FarView.DEFAULT_ORIGIN
-		else FAR_VIEW_ORIGIN
+	local origin = BuildGuard.FarView.DEFAULT_ORIGIN
 	local old = state.farView
 	local ok, rig = pcall(BuildGuard.withUndo, "BuildGuard: build far-view rig", function()
 		if old and old.Parent then
 			old:Destroy()
 		end
-		return build(workspace, origin)
+		return BuildGuard.FarView.build(workspace, origin)
 	end)
 	if not ok then
 		-- Its spot isn't empty (the message says what's there); the old rig is kept.
 		setStatus(tostring(rig))
 		return
 	end
-	state.farView = rig and rig.folder
-	if state.farView then
-		Selection:Set({ state.farView })
-	end
+	state.farView = rig.folder
+	Selection:Set({ rig.folder })
 	setStatus(
 		"Far-view rig built: pairs of plates with gaps from 0.005 to 0.2 studs, labelled, with spawn pads "
 			.. "(View_100, View_300, View_600) that many studs away. Publish to a test place and join it on a phone "
@@ -828,10 +818,7 @@ list.BorderSizePixel = 0
 list.LayoutOrder = nextOrder()
 list.Parent = root
 table.insert(themed, { list, "list" })
-local listLayout = Instance.new("UIListLayout")
-listLayout.Padding = UDim.new(0, 2)
-listLayout.SortOrder = Enum.SortOrder.LayoutOrder
-listLayout.Parent = list
+listLayout(list, 2)
 
 -- Rows have fixed heights; the status line's height depends on its text
 -- (and reads 0 until the widget is first shown).
