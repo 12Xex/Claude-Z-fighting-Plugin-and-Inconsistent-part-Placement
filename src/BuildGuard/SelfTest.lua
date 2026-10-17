@@ -49,15 +49,19 @@ local function snapshot(parts)
 	return out
 end
 
+-- Whether every part is where `snap` saw it (position, size and
+-- rotation); false and the first part that isn't.
 local function sameAs(snap)
 	for p, state in snap do
 		if (p.CFrame.Position - state[1].Position).Magnitude > 1e-4 or (p.Size - state[2]).Magnitude > 1e-4 then
 			return false, p
 		end
-		local _, _, _, r00, r01, r02, r10, r11, r12, r20, r21, r22 = p.CFrame:GetComponents()
-		local _, _, _, s00, s01, s02, s10, s11, s12, s20, s21, s22 = state[1]:GetComponents()
-		local diff = math.abs(r00 - s00) + math.abs(r01 - s01) + math.abs(r02 - s02) + math.abs(r10 - s10)
-			+ math.abs(r11 - s11) + math.abs(r12 - s12) + math.abs(r20 - s20) + math.abs(r21 - s21) + math.abs(r22 - s22)
+		-- Components 4 to 12 are the rotation matrix.
+		local now, was = { p.CFrame:GetComponents() }, { state[1]:GetComponents() }
+		local diff = 0
+		for i = 4, 12 do
+			diff += math.abs(now[i] - was[i])
+		end
 		if diff > 1e-4 then
 			return false, p
 		end
@@ -206,29 +210,23 @@ function SelfTest.run(BuildGuard, options)
 			row(not still, ("%-4s fixed    %-9s %s"):format(p.id, p.check, p.part.Name))
 			if p.expectBottomY then
 				local bottom = p.part.CFrame.Position.Y - p.part.Size.Y / 2
-				row(
-					math.abs(bottom - p.expectBottomY) < 0.02,
-					("%-4s landed   %-9s %s at %.2f (expected %.2f)"):format(
-						p.id,
-						p.check,
-						p.part.Name,
-						bottom,
-						p.expectBottomY
-					)
-				)
+				local text = ("%-4s landed   %-9s %s at %.2f (expected %.2f)"):format(p.id, p.check, p.part.Name, bottom, p.expectBottomY)
+				row(math.abs(bottom - p.expectBottomY) < 0.02, text)
 			end
 		else
 			row(still, ("%-4s flagged  %-9s %s (lint/manual, stays reported)"):format(p.id, p.check, p.part.Name))
 		end
 	end
-	for _, issue in after.issues do
-		local expected = false
+	local function plantedFlag(issue)
 		for _, p in scene.planted do
 			if p.expect == "flag" and issue.check == p.check and table.find(issue.parts, p.part) then
-				expected = true
+				return true
 			end
 		end
-		if not expected then
+		return false
+	end
+	for _, issue in after.issues do
+		if not plantedFlag(issue) then
 			row(false, "left over after fixing: " .. issue.message)
 		end
 	end
@@ -256,6 +254,22 @@ function SelfTest.run(BuildGuard, options)
 	SelfTest.shapeRows(BuildGuard, scanOptions, row)
 
 	return finish(#result.plans)
+end
+
+-- A part that's never parented, so it can't touch the map. Anchored at
+-- `cframe` when one is given.
+local function probe(className, name, size, cframe, shape)
+	local p = Instance.new(className)
+	p.Name = name
+	if shape then
+		p.Shape = Enum.PartType[shape]
+	end
+	p.Size = size
+	if cframe then
+		p.CFrame = cframe
+		p.Anchored = true
+	end
+	return p
 end
 
 local function plantedById(scene, id)
@@ -323,12 +337,6 @@ function SelfTest.extraRows(BuildGuard, scene, before, result, original, config,
 
 	-- Names and sizes that used to fool the checks.
 	local fooled = {}
-	local function probe(name, size, className)
-		local p = Instance.new(className or "Part")
-		p.Name = name
-		p.Size = size
-		return p
-	end
 	for _, case in {
 		{ "StreetLamp", Vector3.new(1, 12, 1) },
 		{ "RoadSign", Vector3.new(6, 4, 0.2) },
@@ -336,12 +344,11 @@ function SelfTest.extraRows(BuildGuard, scene, before, result, original, config,
 		{ "RoofRail", Vector3.new(8, 0.3, 0.3) },
 		{ "Railing", Vector3.new(8, 3, 0.3) },
 	} do
-		if Classify.kind(probe(case[1], case[2]), config) ~= nil then
+		if Classify.kind(probe("Part", case[1], case[2]), config) ~= nil then
 			table.insert(fooled, case[1])
 		end
 	end
-	local slab = probe("FloorSlab", Vector3.new(600, 1, 600))
-	if Classify.isGroundLike(slab, config) then
+	if Classify.isGroundLike(probe("Part", "FloorSlab", Vector3.new(600, 1, 600)), config) then
 		table.insert(fooled, "FloorSlab as ground")
 	end
 	for _, name in { "SteeringWheel", "SpareWheel", "WheelArch_FL" } do
@@ -354,20 +361,8 @@ end
 
 -- Controls only real geometry passes: each pair would be flagged if its
 -- ball, cylinder or corner wedge were taken for its box, or if any two
--- overlapping meshes counted as a copy. Never parented, so they can't
--- touch the map.
+-- overlapping meshes counted as a copy.
 function SelfTest.shapeRows(BuildGuard, scanOptions, row)
-	local function probe(className, name, size, cframe, shape)
-		local p = Instance.new(className)
-		p.Name = name
-		if shape then
-			p.Shape = Enum.PartType[shape]
-		end
-		p.Size = size
-		p.CFrame = cframe
-		p.Anchored = true
-		return p
-	end
 	local at = CFrame.new(0, 10, 0)
 	local cases = {
 		{
