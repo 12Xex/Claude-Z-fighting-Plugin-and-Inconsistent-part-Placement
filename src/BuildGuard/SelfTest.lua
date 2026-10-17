@@ -272,6 +272,15 @@ local function probe(className, name, size, cframe, shape)
 	return p
 end
 
+-- " (label a, b)" for a non-empty list, else "": the detail a failing row
+-- adds to its text.
+local function listed(label, items)
+	if #items == 0 then
+		return ""
+	end
+	return (" (%s%s)"):format(if label then label .. " " else "", table.concat(items, ", "))
+end
+
 local function plantedById(scene, id)
 	for _, p in scene.planted do
 		if p.id == id then
@@ -319,7 +328,10 @@ function SelfTest.extraRows(BuildGuard, scene, before, result, original, config,
 			table.insert(untimed, check.name)
 		end
 	end
-	row(timed.collect and #untimed == 0, "timings    the report times every check" .. (if #untimed > 0 then " (missing " .. table.concat(untimed, ", ") .. ")" else ""))
+	row(
+		timed.collect and #untimed == 0,
+		"timings    the report times every check" .. listed("missing", untimed)
+	)
 
 	-- The fix report gives each changed part's exact move.
 	local changes = result.changes or {}
@@ -356,7 +368,11 @@ function SelfTest.extraRows(BuildGuard, scene, before, result, original, config,
 			table.insert(fooled, name .. " as a wheel")
 		end
 	end
-	row(#fooled == 0, "names      lamps, signs, bed/roof rails, railings, big slabs and steering/spare wheels aren't misread" .. (if #fooled > 0 then " (" .. table.concat(fooled, ", ") .. ")" else ""))
+	row(
+		#fooled == 0,
+		"names      lamps, signs, bed/roof rails, railings, big slabs and steering/spare wheels aren't misread"
+			.. listed(nil, fooled)
+	)
 end
 
 -- Controls only real geometry passes: each pair would be flagged if its

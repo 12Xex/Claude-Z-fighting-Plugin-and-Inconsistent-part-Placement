@@ -323,7 +323,8 @@ function TestScene.build(parent, world, config, origin)
 	-- P16: a road piece on its own, too thick to drive up onto from the ground.
 	local thick = math.min(config.maxLedge + 0.5, (config.maxLedge + config.connectMaxStep) / 2)
 	local thickStep = thick + liftFor(thick)
-	plant(road("Road_Thick", Vector3.new(L, thick, W), CFrame.new(60, liftFor(thick) + thick / 2, zM)), "P16", "edge", "flag", ("%.2f-stud step up from the ground"):format(thickStep))
+	local thickRoad = road("Road_Thick", Vector3.new(L, thick, W), CFrame.new(60, liftFor(thick) + thick / 2, zM))
+	plant(thickRoad, "P16", "edge", "flag", ("%.2f-stud step up from the ground"):format(thickStep))
 
 	-- P27: a Road_* deck on abutments crossing low over a road. The
 	-- Overpasses model asks for more headroom than it leaves; the same

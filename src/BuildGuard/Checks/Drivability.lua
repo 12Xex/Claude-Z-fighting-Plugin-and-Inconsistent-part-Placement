@@ -290,23 +290,44 @@ local function joinIssues(ctx, ra, rb, issues)
 	local at = Vector3.new(jx, math.max(ya, yb), jz)
 	table.insert(ra.joins, at)
 	table.insert(rb.joins, at)
-	-- `text` formats the value, the two paths, the junction, the limit and
-	-- where the limit was set.
-	local function flag(check, value, text, key)
+	local function flag(check, value, message)
 		table.insert(issues, {
 			check = check,
 			severity = "warning",
 			parts = { a.part, b.part },
 			position = at,
 			value = value,
-			message = text:format(value, ctx.path(a.part), ctx.path(b.part), Util.vector(at), config[key], setOn(ctx, sources, key)),
+			message = message,
 		})
 	end
+	local pathA, pathB, where = ctx.path(a.part), ctx.path(b.part), Util.vector(at)
 	if step > config.maxLedge then
-		flag("ledge", step, "Ledge of %.2f studs between %s and %s at %s (limit %.2f%s)", "maxLedge")
+		flag(
+			"ledge",
+			step,
+			("Ledge of %.2f studs between %s and %s at %s (limit %.2f%s)"):format(
+				step,
+				pathA,
+				pathB,
+				where,
+				config.maxLedge,
+				setOn(ctx, sources, "maxLedge")
+			)
+		)
 	end
 	if angle > config.maxSlopeChange then
-		flag("slope", angle, "Slope change of %.1f° between %s and %s at %s (limit %.1f°%s)", "maxSlopeChange")
+		flag(
+			"slope",
+			angle,
+			("Slope change of %.1f° between %s and %s at %s (limit %.1f°%s)"):format(
+				angle,
+				pathA,
+				pathB,
+				where,
+				config.maxSlopeChange,
+				setOn(ctx, sources, "maxSlopeChange")
+			)
+		)
 	end
 end
 
