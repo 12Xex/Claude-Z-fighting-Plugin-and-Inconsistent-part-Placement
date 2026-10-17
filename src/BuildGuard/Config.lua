@@ -234,28 +234,20 @@ function Config.check(key, value, fromAttribute)
 	return true
 end
 
-local function checkNudge(config)
-	if config.zFightNudge <= config.zFightTolerance then
-		return false, "zFightNudge must be larger than zFightTolerance"
-	end
-	return true
-end
+local NUDGE_MESSAGE = "zFightNudge must be larger than zFightTolerance"
 
 -- Returns a new config table: defaults overlaid with `overrides`.
 function Config.merge(overrides)
 	local result = table.clone(Config.defaults)
-	if overrides then
-		for key, value in overrides do
-			local ok, message = Config.check(key, value)
-			if not ok then
-				error("BuildGuard: " .. message, 2)
-			end
-			result[key] = value
+	for key, value in overrides or {} do
+		local ok, message = Config.check(key, value)
+		if not ok then
+			error("BuildGuard: " .. message, 2)
 		end
+		result[key] = value
 	end
-	local ok, message = checkNudge(result)
-	if not ok then
-		error("BuildGuard: " .. message, 2)
+	if result.zFightNudge <= result.zFightTolerance then
+		error("BuildGuard: " .. NUDGE_MESSAGE, 2)
 	end
 	return result
 end
@@ -309,12 +301,9 @@ function Config.resolver(base, place)
 		for _, e in errors do
 			table.insert(self.errors, e)
 		end
-		if own.zFightNudge ~= nil then
-			local ok, message = checkNudge({ zFightNudge = own.zFightNudge, zFightTolerance = config.zFightTolerance })
-			if not ok then
-				own.zFightNudge = nil
-				table.insert(self.errors, { instance = instance, attribute = Config.ATTRIBUTE_PREFIX .. "zFightNudge", message = message })
-			end
+		if own.zFightNudge ~= nil and own.zFightNudge <= config.zFightTolerance then
+			own.zFightNudge = nil
+			table.insert(self.errors, { instance = instance, attribute = Config.ATTRIBUTE_PREFIX .. "zFightNudge", message = NUDGE_MESSAGE })
 		end
 		if next(own) == nil then
 			return config, sources
