@@ -22,18 +22,20 @@ local Classify = require(script.Parent.Classify)
 
 local Vehicle = {}
 
-local function corners(part, frame)
+-- The part's bounding box in `frame`'s space: min, max corners.
+local function bounds(part, frame)
 	local half = part.Size / 2
-	local out = {}
+	local lo, hi = Vector3.one * math.huge, -Vector3.one * math.huge
 	for _, x in { -1, 1 } do
 		for _, y in { -1, 1 } do
 			for _, z in { -1, 1 } do
 				local world = part.CFrame:PointToWorldSpace(Vector3.new(x * half.X, y * half.Y, z * half.Z))
-				table.insert(out, frame:PointToObjectSpace(world))
+				local c = frame:PointToObjectSpace(world)
+				lo, hi = lo:Min(c), hi:Max(c)
 			end
 		end
 	end
-	return out
+	return lo, hi
 end
 
 local function wheelRadius(part, frame)
@@ -45,43 +47,32 @@ local function wheelRadius(part, frame)
 	elseif ok and shape == "Ball" then
 		return math.min(part.Size.X, part.Size.Y, part.Size.Z) / 2
 	end
-	local low, high = math.huge, -math.huge
-	for _, c in corners(part, frame) do
-		low, high = math.min(low, c.Y), math.max(high, c.Y)
-	end
-	return (high - low) / 2
+	local lo, hi = bounds(part, frame)
+	return (hi.Y - lo.Y) / 2
 end
 
--- Measures `model`. Returns a profile table (all lengths in studs, angles
--- in degrees).
-function Vehicle.measure(model, options)
-	options = options or {}
-	local parts = {}
-	if model:IsA("BasePart") then
-		table.insert(parts, model)
+-- The model's parts split into wheels and body, plus a wheel lookup.
+local function splitParts(model)
+	local isWheel = {}
+	for _, w in Classify.wheels(model) do
+		isWheel[w] = true
 	end
+	local parts = if model:IsA("BasePart") then { model } else {}
 	for _, d in model:GetDescendants() do
 		if d:IsA("BasePart") then
 			table.insert(parts, d)
 		end
 	end
-	local isWheel = {}
-	for _, w in Classify.wheels(model) do
-		isWheel[w] = true
-	end
 	local wheels, body = {}, {}
 	for _, p in parts do
 		table.insert(if isWheel[p] then wheels else body, p)
 	end
-	if #wheels == 0 then
-		error(
-			"BuildGuard: no wheels found in "
-				.. model:GetFullName()
-				.. "; name them Wheel_FL, Tire_RearLeft and so on, or tag them BuildGuardWheel",
-			2
-		)
-	end
+	return parts, wheels, body, isWheel
+end
 
+-- The vehicle's orientation (rotation only): options.frame, the
+-- PrimaryPart, or else the biggest body part (or wheel).
+local function orientation(model, options, wheels, body)
 	local frame = options.frame or (model:IsA("Model") and model.PrimaryPart and model.PrimaryPart.CFrame)
 	if not frame then
 		local biggest, volume = nil, -1
@@ -93,7 +84,23 @@ function Vehicle.measure(model, options)
 		end
 		frame = biggest.CFrame
 	end
-	frame = frame - frame.Position
+	return frame - frame.Position
+end
+
+-- Measures `model`. Returns a profile table (all lengths in studs, angles
+-- in degrees).
+function Vehicle.measure(model, options)
+	options = options or {}
+	local parts, wheels, body, isWheel = splitParts(model)
+	if #wheels == 0 then
+		error(
+			"BuildGuard: no wheels found in "
+				.. model:GetFullName()
+				.. "; name them Wheel_FL, Tire_RearLeft and so on, or tag them BuildGuardWheel",
+			2
+		)
+	end
+	local frame = orientation(model, options, wheels, body)
 
 	local ground, radius = math.huge, math.huge
 	local frontAxle, rearAxle = math.huge, -math.huge
@@ -106,32 +113,27 @@ function Vehicle.measure(model, options)
 		rearAxle = math.max(rearAxle, c.Z)
 	end
 
-	local minV, maxV = Vector3.new(math.huge, math.huge, math.huge), Vector3.new(-math.huge, -math.huge, -math.huge)
+	local minV, maxV = Vector3.one * math.huge, -Vector3.one * math.huge
 	local clearance, midClearance = math.huge, math.huge
 	local approach, departure = 90, 90
 	for _, p in parts do
-		-- The part's bounding box in the vehicle's frame.
-		local lo, hi = Vector3.new(math.huge, math.huge, math.huge), Vector3.new(-math.huge, -math.huge, -math.huge)
-		for _, c in corners(p, frame) do
-			lo = Vector3.new(math.min(lo.X, c.X), math.min(lo.Y, c.Y), math.min(lo.Z, c.Z))
-			hi = Vector3.new(math.max(hi.X, c.X), math.max(hi.Y, c.Y), math.max(hi.Z, c.Z))
+		local lo, hi = bounds(p, frame)
+		minV, maxV = minV:Min(lo), maxV:Max(hi)
+		if isWheel[p] then
+			continue
 		end
-		minV = Vector3.new(math.min(minV.X, lo.X), math.min(minV.Y, lo.Y), math.min(minV.Z, lo.Z))
-		maxV = Vector3.new(math.max(maxV.X, hi.X), math.max(maxV.Y, hi.Y), math.max(maxV.Z, hi.Z))
-		if not isWheel[p] then
-			local h = lo.Y - ground
-			clearance = math.min(clearance, h)
-			-- Any part of it between the axles limits breakover.
-			if hi.Z >= frontAxle and lo.Z <= rearAxle then
-				midClearance = math.min(midClearance, h)
-			end
-			-- Its lowest, furthest-forward point limits approach (and rear for departure).
-			if lo.Z < frontAxle then
-				approach = math.min(approach, math.deg(math.atan2(h, frontAxle - lo.Z)))
-			end
-			if hi.Z > rearAxle then
-				departure = math.min(departure, math.deg(math.atan2(h, hi.Z - rearAxle)))
-			end
+		local h = lo.Y - ground
+		clearance = math.min(clearance, h)
+		-- Any part of it between the axles limits breakover.
+		if hi.Z >= frontAxle and lo.Z <= rearAxle then
+			midClearance = math.min(midClearance, h)
+		end
+		-- Its lowest, furthest-forward point limits approach (and rear for departure).
+		if lo.Z < frontAxle then
+			approach = math.min(approach, math.deg(math.atan2(h, frontAxle - lo.Z)))
+		end
+		if hi.Z > rearAxle then
+			departure = math.min(departure, math.deg(math.atan2(h, hi.Z - rearAxle)))
 		end
 	end
 	local wheelbase = rearAxle - frontAxle

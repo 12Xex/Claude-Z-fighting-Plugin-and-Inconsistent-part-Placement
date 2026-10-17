@@ -52,6 +52,22 @@ local function box(folder)
 	return CFrame.new((min + max) / 2), max - min
 end
 
+-- An always-on-top text label floating at `anchor`.
+local function addLabel(anchor, text)
+	local board = Instance.new("BillboardGui")
+	board.Size = UDim2.fromScale(8, 3)
+	board.AlwaysOnTop = true
+	board.Parent = anchor
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.fromScale(1, 1)
+	label.BackgroundTransparency = 1
+	label.TextScaled = true
+	label.TextColor3 = Color3.new(1, 1, 1)
+	label.TextStrokeTransparency = 0
+	label.Text = text
+	label.Parent = board
+end
+
 function FarView.build(parent, origin, world)
 	origin = origin or FarView.DEFAULT_ORIGIN
 	local base = CFrame.new(origin)
@@ -86,22 +102,10 @@ function FarView.build(parent, origin, world)
 		-- Standing pair facing the viewing spots (-Z): front faces `gap` apart.
 		part(("Wall_%g"):format(gap), Vector3.new(10, 10, 1), CFrame.new(x, 6, 8), WHITE)
 		part(("WallOverlay_%g"):format(gap), Vector3.new(8, 8, gap), CFrame.new(x, 6, 7.5 - gap / 2), RED)
-		-- Label.
 		local anchor = part(("Label_%g"):format(gap), Vector3.new(1, 1, 1), CFrame.new(x, 13, 8), WHITE)
 		anchor.Transparency = 1
 		anchor.CanCollide = false
-		local board = Instance.new("BillboardGui")
-		board.Size = UDim2.fromScale(8, 3)
-		board.AlwaysOnTop = true
-		board.Parent = anchor
-		local text = Instance.new("TextLabel")
-		text.Size = UDim2.fromScale(1, 1)
-		text.BackgroundTransparency = 1
-		text.TextScaled = true
-		text.TextColor3 = Color3.new(1, 1, 1)
-		text.TextStrokeTransparency = 0
-		text.Text = ("%g"):format(gap)
-		text.Parent = board
+		addLabel(anchor, ("%g"):format(gap))
 	end
 
 	for _, distance in FarView.DISTANCES do
